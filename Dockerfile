@@ -15,4 +15,4 @@ COPY --from=builder /etc/ssl  /etc/ssl
 
 WORKDIR /opt/openlist/
 
-ENTRYPOINT ["openlist"]
+ENTRYPOINT [ "openlist", "server" ]
