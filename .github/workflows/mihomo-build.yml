@@ -40,9 +40,7 @@ jobs:
       - name: Build
         working-directory: ./mihomo
         run: |
-          buildtime=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          echo "BUILDTIME=${buildtime}" >> $GITHUB_ENV
-          LDFLAGS="-s -w -X 'github.com/metacubex/mihomo/constant.Version=${{ github.event.inputs.tag }}' -X 'github.com/metacubex/mihomo/constant.BuildTime=${{ env.BUILDTIME }}'"
+          LDFLAGS="-s -w -X 'github.com/metacubex/mihomo/constant.Version=${{ github.event.inputs.tag }}'"
           # The -ldflags strip debug info to reduce binary size.
           GOOS=linux GOARCH=${{ matrix.goarch }} go build -o mihomo-${{ matrix.goarch }} -tags no_fake_tcp -ldflags="${LDFLAGS}"
 

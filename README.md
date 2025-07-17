@@ -1,2 +1,1 @@
-# openlist
-For my personal use
+# For my personal use
