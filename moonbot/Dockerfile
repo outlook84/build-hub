@@ -1,0 +1,15 @@
+ARG PYTHON_VERSION=3.11
+FROM python:${PYTHON_VERSION}-alpine
+
+WORKDIR /app
+COPY ./Moon-Userbot /app
+
+RUN python -m venv --copies /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+RUN apk add --no-cache tzdata git ffmpeg mediainfo && \
+    apk add --no-cache --virtual .build-deps gcc musl-dev linux-headers && \
+    pip install --no-cache-dir -r requirements.txt && \
+    apk del .build-deps
+
+CMD ["python", "main.py"]

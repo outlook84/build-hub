@@ -1,0 +1,85 @@
+name: build
+
+on:
+  workflow_dispatch: 
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      UPSTREAM_REPO: https://github.com/The-MoonTg-project/Moon-Userbot.git
+      WORKDIR: moonbot
+
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+
+      - name: Clone latest
+        working-directory: ./${{ env.WORKDIR }}
+        run: |
+          git clone --depth 1 "$UPSTREAM_REPO"
+
+      - name: Append google-generativeai to requirements.txt and copy gemini.py
+        working-directory: ./${{ env.WORKDIR }}
+        run: |
+          echo -e "\ngoogle-generativeai" >> ./Moon-Userbot/requirements.txt
+          mkdir -p ./Moon-Userbot/modules/custom_modules
+          cp gemini.py ./Moon-Userbot/modules/custom_modules/
+
+      - name: Get upstream commit SHA
+        working-directory: ./${{ env.WORKDIR }}
+        id: get_upstream_sha
+        run: |
+          UPSTREAM_SHA=$(git -C ./OpenList rev-parse --short HEAD)
+          echo "Upstream commit SHA is $UPSTREAM_SHA"
+          echo "upstream_sha=$UPSTREAM_SHA" >> $GITHUB_OUTPUT
+
+      - name: Extract upstream Python version
+        working-directory: ./${{ env.WORKDIR }}
+        id: python_version
+        run: |
+          version=$(sed -nE 's|^FROM python:([0-9]+(\.[0-9]+)+).*|\1|p' ./Moon-Userbot/Dockerfile)
+          echo "Detected version: $version"
+          echo "python_version=$version" >> $GITHUB_OUTPUT
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Generate tag from date
+        id: date_tag
+        run: |
+          DATE_TAG=$(date +%F)
+          echo "date_tag=$DATE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/outlook84/mootbot
+          tags: |
+            type=raw,enable=true,value=${{ steps.date_tag.outputs.date_tag }}
+            type=sha,sha=${{ steps.get_upstream_sha.outputs.upstream_sha }}
+            latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: "./${{ env.WORKDIR }}"
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            PYTHON_VERSION=${{ steps.python_version.outputs.python_version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
