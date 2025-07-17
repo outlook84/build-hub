@@ -64,5 +64,6 @@ jobs:
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
         with:
-          # The files to upload. The pattern will find all .exe files within the subdirectories.
+          tag_name: ${{ github.event.inputs.tag }}
+          name: mihomo release ${{ github.event.inputs.tag }}
           files: artifacts/**/mihomo-*
