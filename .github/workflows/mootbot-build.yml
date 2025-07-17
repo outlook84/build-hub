@@ -1,4 +1,4 @@
-name: build
+name: moonbot build
 
 on:
   workflow_dispatch: 
@@ -33,7 +33,7 @@ jobs:
         working-directory: ./${{ env.WORKDIR }}
         id: get_upstream_sha
         run: |
-          UPSTREAM_SHA=$(git -C ./OpenList rev-parse --short HEAD)
+          UPSTREAM_SHA=$(git -C ./Moon-Userbot rev-parse --short HEAD)
           echo "Upstream commit SHA is $UPSTREAM_SHA"
           echo "upstream_sha=$UPSTREAM_SHA" >> $GITHUB_OUTPUT
 
