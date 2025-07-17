@@ -1,0 +1,71 @@
+name: caddy build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'The version to build'
+        required: true
+        type: string
+      build_platforms:
+        description: 'The platforms to build for (comma-separated)'
+        required: true
+        default: 'linux/amd64,linux/arm64'
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # Needed to push to GitHub Packages
+    env:
+      WORKDIR: caddy
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Proper tag for Dockerfile
+        id: set-tag
+        run: |
+          TAG=${{ github.event.inputs.version }}
+          CLEAN_TAG=${TAG#v}
+          echo $CLEAN_TAG
+          echo "CADDY_VERSION=${CLEAN_TAG}" >> $GITHUB_ENV
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,enable=true,value=${{ env.CADDY_VERSION }}
+            latest
+
+      - name: Build and push Docker image
+        id: build-and-push
+        uses: docker/build-push-action@v6
+        with:
+          context: "./${{ env.WORKDIR }}"
+          platforms: ${{ github.event.inputs.build_platforms }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            CADDY_VERSION=${{ env.CADDY_VERSION }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
