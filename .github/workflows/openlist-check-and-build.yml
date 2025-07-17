@@ -1,5 +1,5 @@
 
-name: Check for new upsteam tag and build
+name: Check for opnelist new upsteam tag and build
 
 on:
   schedule:
