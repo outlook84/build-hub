@@ -4,3 +4,7 @@ updates:
     directory: "/.github/workflows"
     schedule:
       interval: "weekly"
+  - package-ecosystem: "docker"
+    directory: "/openlist"
+    schedule:
+      interval: "weekly"
