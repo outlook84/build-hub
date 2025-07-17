@@ -51,7 +51,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ghcr.io/outlook84/caddy
           tags: |
             type=raw,enable=true,value=${{ env.CADDY_VERSION }}
             latest
