@@ -3,6 +3,7 @@
 # YOu can check it out for uses example
 
 import io
+import asyncio
 from datetime import datetime, timedelta
 
 from pyrogram import Client, filters, enums
@@ -22,6 +23,9 @@ from utils.rentry import paste as rentry_paste
 genai = import_library("google.generativeai", "google-generativeai")
 
 genai.configure(api_key=gemini_key)
+
+# Thread-safety lock for chat history
+_chat_lock = asyncio.Lock()
 
 chat_history = {}
 last_interaction_time = {}
@@ -122,7 +126,7 @@ async def _gemini_imgen(client: Client, message: Message):
                     image_file.name = "image.jpeg"
                     
                     processed_prompt = prompt.replace('\n', '\n> ')
-                    caption_text = f"**{caption_action} Image**\n\n👤**Prompt:**\n> {processed_prompt}\nPowered by Gemini"
+                    caption_text = f"**{caption_action} Image**\n**Prompt:**\n> {processed_prompt}\nPowered by Gemini"
 
                     await client.send_photo(
                         message.chat.id,
@@ -154,16 +158,22 @@ async def _ask_gemini(client: Client, message: Message):
         await message.edit_text("<code>Thinking...</code>")
 
         command_text = message.text or message.caption or ""
-        prompt = ""
-        parts = command_text.split(maxsplit=1)
-        if len(parts) > 1:
-            prompt = parts[1]
-        elif message.reply_to_message:
-            prompt = (
+        prompt_parts = []
+
+        if message.reply_to_message:
+            replied_text = (
                 message.reply_to_message.text
                 or message.reply_to_message.caption
-                or ""
             )
+            if replied_text:
+                prompt_parts.append(replied_text)
+
+        parts = command_text.split(maxsplit=1)
+        if len(parts) > 1:
+            command_prompt = parts[1]
+            prompt_parts.append(command_prompt)
+
+        prompt = "\n".join(prompt_parts)
 
         image_part = None
         media_to_process = None
@@ -208,21 +218,20 @@ async def _ask_gemini(client: Client, message: Message):
         is_context_on = db.get("custom.gemini", "context_on", False)
         user_id = message.from_user.id
 
-        global chat_history, last_interaction_time, context_expiration_minutes
-
         if is_context_on:
-            if user_id not in chat_history or \
-               (user_id in last_interaction_time and \
-                datetime.now() - last_interaction_time[user_id] > timedelta(minutes=context_expiration_minutes)):
-                chat_history[user_id] = []
+            async with _chat_lock:
+                if user_id not in chat_history or \
+                   (user_id in last_interaction_time and \
+                    datetime.now() - last_interaction_time[user_id] > timedelta(minutes=context_expiration_minutes)):
+                    chat_history[user_id] = []
+                
                 last_interaction_time[user_id] = datetime.now()
-
-            chat = model.start_chat(history=chat_history[user_id])
-            response = await chat.send_message_async(contents)
-            chat_history[user_id] = chat.history
-            last_interaction_time[user_id] = datetime.now()
+                
+                chat = model.start_chat(history=chat_history[user_id])
+                response = await chat.send_message_async(contents)
+                chat_history[user_id] = chat.history
         else:
-            response = model.generate_content(contents)
+            response = await model.generate_content_async(contents)
 
         output_text = response.text
         if prompt:
@@ -353,14 +362,12 @@ async def gemini(client: Client, message: Message):
                 if action == "list":
                     prompts = db.get("custom.gemini", "prompts", {})
                     if prompts:
-                        response_text = "<b>Available system prompts:</b>\n\n"
+                        response_text = "**Available system prompts:**\n\n"
                         for name, content in prompts.items():
-                            safe_name = name.replace('<', '&lt;').replace('>', '&gt;').replace('&', '&amp;')
-                            safe_content = content.replace('<', '&lt;').replace('>', '&gt;').replace('&', '&amp;')
-                            response_text += f"• <code>{safe_name}</code>:\n<pre>{safe_content}</pre>\n"
-                        await message.edit_text(response_text, parse_mode=enums.ParseMode.HTML)
+                            response_text += f"• `{name}`:\n> {content.replace(chr(10), chr(10) + '> ')}\n"
+                        await message.edit_text(response_text, parse_mode=enums.ParseMode.MARKDOWN)
                     else:
-                        await message.edit_text("<b>No system prompts saved.</b>")
+                        await message.edit_text("**No system prompts saved.**")
                     return
                 if action == "set":
                     if len(command) > 3:
@@ -396,30 +403,39 @@ async def gemini(client: Client, message: Message):
                     await message.edit_text("<b>Gemini context is now OFF.</b>")
                 elif action == "clear":
                     user_id = message.from_user.id
-                    if user_id in chat_history:
-                        del chat_history[user_id]
-                    if user_id in last_interaction_time:
-                        del last_interaction_time[user_id]
+                    async with _chat_lock:
+                        if user_id in chat_history:
+                            del chat_history[user_id]
+                        if user_id in last_interaction_time:
+                            del last_interaction_time[user_id]
                     await message.edit_text("<b>Gemini chat history cleared.</b>")
                 elif action == "show":
                     user_id = message.from_user.id
                     user_chat_history = chat_history.get(user_id, [])
                     if user_chat_history:
-                        response_text = "<b>Current chat history:</b>\n\n"
+                        response_text = "**Current chat history:**\n\n"
                         for item in user_chat_history:
                             role = item.role.capitalize()
-                            content_parts = []
-                            for part in item.parts:
-                                if hasattr(part, 'text') and part.text:
-                                    content_parts.append(part.text)
-                                if hasattr(part, 'inline_data'):
-                                    content_parts.append("[Image]")
-                            full_content = " ".join(content_parts)
-                            safe_text = full_content.replace('<', '&lt;').replace('>', '&gt;').replace('&', '&amp;')
-                            response_text += f"<b>{role}:</b>\n<pre>{safe_text}</pre>\n"
-                        await message.edit_text(response_text, parse_mode=enums.ParseMode.HTML)
+                            
+                            text_parts = [p.text for p in item.parts if hasattr(p, 'text') and p.text]
+                            
+                            # Correctly check for actual image data
+                            has_image = any(
+                                hasattr(p, 'inline_data') and p.inline_data and p.inline_data.data 
+                                for p in item.parts
+                            )
+
+                            if text_parts:
+                                full_content = " ".join(text_parts)
+                            elif has_image:
+                                full_content = "[Image]"
+                            else:
+                                full_content = "[Empty Message]"
+
+                            response_text += f"**{role}:**\n> {full_content.replace(chr(10), chr(10) + '> ')}\n"
+                        await message.edit_text(response_text, parse_mode=enums.ParseMode.MARKDOWN)
                     else:
-                        await message.edit_text("<b>Chat history is empty.</b>")
+                        await message.edit_text("**Chat history is empty.**")
                 elif action == "expire":
                     if len(command) > 3:
                         try:
