@@ -26,6 +26,7 @@ jobs:
         working-directory: ./${{ env.WORKDIR }}
         run: |
           echo -e "\ngoogle-generativeai" >> ./Moon-Userbot/requirements.txt
+          echo -e "\ngoogle-genai" >> ./Moon-Userbot/requirements.txt
           mkdir -p ./Moon-Userbot/modules/custom_modules
           cp gemini.py ./Moon-Userbot/modules/custom_modules/
           cp google.py ./Moon-Userbot/modules/custom_modules/
