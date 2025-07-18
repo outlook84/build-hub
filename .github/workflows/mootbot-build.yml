@@ -28,6 +28,7 @@ jobs:
           echo -e "\ngoogle-generativeai" >> ./Moon-Userbot/requirements.txt
           mkdir -p ./Moon-Userbot/modules/custom_modules
           cp gemini.py ./Moon-Userbot/modules/custom_modules/
+          cp google.py ./Moon-Userbot/modules/custom_modules/
 
       - name: Get upstream commit SHA
         working-directory: ./${{ env.WORKDIR }}
