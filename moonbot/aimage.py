@@ -83,26 +83,26 @@ async def together_main(client: Client, message: Message):
             return
         elif message.command[1] == "model":
             if len(message.command) > 2:
-                model_name = " ".join(message.command[2:])
-                db.set("custom.together", "model", model_name)
-                await message.edit_text(f"<b>Together AI model set to:</b> <code>{model_name}</code>")
+                if message.command[2] == "flux-free":
+                    db.set("custom.together", "model", "black-forest-labs/FLUX.1-schnell-Free")
+                    await message.edit_text("<b>Model set to:</b> <code>black-forest-labs/FLUX.1-schnell-Free</code>")
+                    return
+                elif message.command[2] == "flux-schnell":
+                    db.set("custom.together", "model", "black-forest-labs/FLUX.1-schnell")
+                    await message.edit_text("<b>Model set to:</b> <code>black-forest-labs/FLUX.1-schnell</code>")
+                    return
+                elif message.command[2] == "flux-dev":
+                    db.set("custom.together", "model", "black-forest-labs/FLUX.1-dev")
+                    await message.edit_text("<b>Model set to:</b> <code>black-forest-labs/FLUX.1-dev</code>")
+                    return
+                else:
+                    model_name = " ".join(message.command[2:])
+                    db.set("custom.together", "model", model_name)
+                    await message.edit_text(f"<b>Together AI model set to:</b> <code>{model_name}</code>")
             else:
                 current_model = db.get("custom.together", "model", "black-forest-labs/FLUX.1-schnell-Free")
                 await message.edit_text(f"<b>Usage:</b> <code>{prefix}together model [model_name]</code>\n\n<b>Current model:</b> <code>{current_model}</code>")
             return
-        elif message.command[1] == "flux-free":
-            db.set("custom.together", "model", "black-forest-labs/FLUX.1-schnell-Free")
-            await message.edit_text("<b>Model set to:</b> <code>black-forest-labs/FLUX.1-schnell-Free</code>")
-            return
-        elif message.command[1] == "flux-schnell":
-            db.set("custom.together", "model", "black-forest-labs/FLUX.1-schnell")
-            await message.edit_text("<b>Model set to:</b> <code>black-forest-labs/FLUX.1-schnell</code>")
-            return
-        elif message.command[1] == "flux-dev":
-            db.set("custom.together", "model", "black-forest-labs/FLUX.1-dev")
-            await message.edit_text("<b>Model set to:</b> <code>black-forest-labs/FLUX.1-dev</code>")
-            return
-
     await _together_imgen(client, message)
 
 
