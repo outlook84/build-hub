@@ -95,8 +95,15 @@ def download_video(url):
                 with open("thumbyt.jpg", "wb") as f:
                     f.write(img_content)
                 img = resize_image("thumbyt.jpg")
-            file_path = ydl.prepare_filename(info)
             ydl.download([url])
+            # Search for the file in the videos folder
+            for file in os.listdir("downloads/ytdl/videos"):
+                file_path = os.path.join("downloads/ytdl/videos", file)
+                title = os.path.splitext(file)[0]
+                if os.path.isfile(file_path):
+                    break
+            else:
+                raise FileNotFoundError("Downloaded file not found in videos folder")
             return file_path, title, img, thumb_url
     except (DownloadError, ExtractorError) as e:
         if is_youtube_url:
@@ -122,7 +129,6 @@ def download_video(url):
 
 
 def download_music(url):
-    is_youtube_url = "youtube.com" in url or "youtu.be" in url
     try:
         with YoutubeDL(ydm_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -134,31 +140,32 @@ def download_music(url):
                 with open("thumbyt.jpg", "wb") as f:
                     f.write(resp.content)
                 img = resize_image("thumbyt.jpg")
-            file_path = ydl.prepare_filename(info)
-            title = info.get("title")
             ydl.download([url])
+            # Search for the file in the audios folder
+            for file in os.listdir("downloads/ytdl/audios"):
+                file_path = os.path.join("downloads/ytdl/audios", file)
+                title = os.path.splitext(file)[0]
+                if os.path.isfile(file_path):
+                    break
+            else:
+                raise FileNotFoundError("Downloaded file not found in audios folder")
             return file_path, title, img
-    except (DownloadError, ExtractorError) as e:
-        if is_youtube_url:
-            video_id = extract_video_id(url)
-            is_videoId = True if video_id is not None else False
-            video_id = url if video_id is None else video_id
-            title, thumb_url, songlink = search_api(video_id, is_videoId)
-            if not songlink:
-                raise e
-            img = None
-            if thumb_url:
-                resp = requests.get(thumb_url)
-                with open("thumbyt.jpg", "wb") as f:
-                    f.write(resp.content)
-                img = resize_image("thumbyt.jpg")
-            resp = requests.get(songlink)
-            os.makedirs("downloads/ytdl/audios", exist_ok=True)
-            file_path = f"downloads/ytdl/audios/{title}.mp3"
-            with open(file_path, "wb") as f:
+    except (DownloadError, ExtractorError):
+        video_id = extract_video_id(url)
+        is_videoId = True if video_id is not None else False
+        video_id = url if video_id is None else video_id
+        title, thumb_url, songlink = search_api(video_id, is_videoId)
+        img = None
+        if thumb_url:
+            resp = requests.get(thumb_url)
+            with open("thumbyt.jpg", "wb") as f:
                 f.write(resp.content)
-            return file_path, title, img
-        raise e
+            img = resize_image("thumbyt.jpg")
+        resp = requests.get(songlink)
+        os.makedirs("downloads/ytdl/audios", exist_ok=True)
+        with open("downloads/ytdl/audios/" + title + ".mp3", "wb") as f:
+            f.write(resp.content)
+        return "downloads/ytdl/audios/" + title + ".mp3", title, img
 
 
 @Client.on_message(filters.command(["ytv", "ytm"], prefix) & filters.me)
@@ -186,7 +193,7 @@ async def ytvm(client: Client, message: Message):
                 message.chat.id,
                 video=file_path,
                 thumb=img,
-                caption=f"<code>{title}</code>",
+                caption=f"<code>{title}</code>\n<a href='{url}'>Original URL</a>",
                 progress=progress,
                 progress_args=(ms, c, "<code>Uploading Video...</code>"),
             )
@@ -202,10 +209,9 @@ async def ytvm(client: Client, message: Message):
             url = message.text.split(None, 1)[1]
             file_path, title, img = download_music(url)
 
-            if file_path.endswith(".webm"):
-                new_path = file_path.replace(".webm", ".m4a")
-                os.rename(file_path, new_path)
-                file_path = new_path
+            new_path = file_path.replace(".webm", ".m4a")
+            os.rename(file_path, new_path)
+            file_path = new_path
 
             ms = await message.edit_text("Uploading Audio...")
             c = time.time()
@@ -219,8 +225,7 @@ async def ytvm(client: Client, message: Message):
                 progress_args=(ms, c, "<code>Uploading Audio...</code>"),
             )
             os.remove(file_path)
-            if os.path.exists("thumbyt.jpg"):
-                os.remove("thumbyt.jpg")
+            os.remove("thumbyt.jpg") if os.path.exists("thumbyt.jpg") else None
             await message.delete()
         except Exception as e:
             await message.edit_text(f"An error occurred: {format_exc(e)}")
