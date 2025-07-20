@@ -11,18 +11,21 @@ from pyrogram.types import Message
 from pyrogram.errors import MessageTooLong
 
 
-
 from PIL import Image
 
 from utils.db import db
 from utils.misc import modules_help, prefix
 from utils.scripts import format_exc, import_library
 from utils.config import gemini_key
-from utils.rentry import paste as rentry_paste
 
 genai = import_library("google.generativeai", "google-generativeai")
+telegraph_lib = import_library("telegraph", "telegraph")
 
 genai.configure(api_key=gemini_key)
+
+# Setup Telegraph
+telegraph = telegraph_lib.Telegraph()
+
 
 # Thread-safety lock for chat history
 _chat_lock = asyncio.Lock()
@@ -218,6 +221,14 @@ async def _ask_gemini(client: Client, message: Message):
         is_context_on = db.get("custom.gemini", "context_on", False)
         user_id = message.from_user.id
 
+        max_tokens = db.get("custom.gemini", "max_tokens")
+        generation_config = None
+        if max_tokens:
+            try:
+                generation_config = {"max_output_tokens": int(max_tokens)}
+            except (ValueError, TypeError):
+                pass
+
         if is_context_on:
             async with _chat_lock:
                 if user_id not in chat_history or \
@@ -228,12 +239,18 @@ async def _ask_gemini(client: Client, message: Message):
                 last_interaction_time[user_id] = datetime.now()
                 
                 chat = model.start_chat(history=chat_history[user_id])
-                response = await chat.send_message_async(contents)
+                response = await chat.send_message_async(contents, generation_config=generation_config)
                 chat_history[user_id] = chat.history
         else:
-            response = await model.generate_content_async(contents)
+            response = await model.generate_content_async(contents, generation_config=generation_config)
 
-        output_text = response.text
+        output_text = ""
+        if response.parts:
+            output_text = "".join(part.text for part in response.parts)
+
+        if response.candidates[0].finish_reason.name == "MAX_TOKENS":
+            output_text += "\n\n[...Output truncated due to max_tokens limit...]"
+
         if prompt:
             processed_prompt = prompt.replace('\n', '\n> ')
             question_text = f"👤**Prompt:**\n> {processed_prompt}"
@@ -248,27 +265,44 @@ async def _ask_gemini(client: Client, message: Message):
             parse_mode=enums.ParseMode.MARKDOWN,
         )
     except MessageTooLong:
-        await message.edit_text(
-            "<code>Output is too long... Pasting to rentry...</code>"
-        )
-        try:
-            rentry_url, edit_code = await rentry_paste(
-                text=f"{response.text}\n\nPowered by Gemini", return_edit=True
-            )
-        except RuntimeError:
+        if not db.get("custom.gemini", "telegraph_on", True):
             await message.edit_text(
-                "<b>Error:</b> <code>Failed to paste to rentry</code>"
+                "<b>Error:</b> <code>Output is too long.</code>\n"
+                f"<b>Tip:</b> <code>You can enable Telegraph posting with {prefix}gemini telegraph on</code>"
             )
             return
-        await client.send_message(
-            "me",
-            f"Here's your edit code for Url: {rentry_url}\nEdit code:  <code>{edit_code}</code>",
-            disable_web_page_preview=True,
-        )
+
         await message.edit_text(
-            f"<b>Output:</b> {rentry_url}\n<b>Note:</b> <code>Edit Code has been sent to your saved messages</code>",
-            disable_web_page_preview=True,
+            "<code>Output is too long... Pasting to Telegraph...</code>"
         )
+        try:
+            short_name = db.get("custom.gemini", "telegraph_short_name", "Moonbot")
+            telegraph.create_account(short_name=short_name, replace_token=True)
+            response_text = output_text.replace('\n', '<br>')
+            page = await asyncio.to_thread(
+                telegraph.create_page,
+                title="Gemini Response",
+                html_content=f"<p>{response_text}</p><br><em>Powered by Gemini</em>"
+            )
+            telegraph_url = page['url']
+
+            if prompt:
+                processed_prompt = prompt.replace('\n', '\n> ')
+                question_text = f"👤**Prompt:**\n> {processed_prompt}"
+            else:
+                question_text = ""
+            
+            formatted_response = f"🤖**Response:**\n> {telegraph_url}"
+
+            await message.edit_text(
+                f"{question_text}\n{formatted_response}\nPowered by Gemini",
+                disable_web_page_preview=False,
+                parse_mode=enums.ParseMode.MARKDOWN,
+            )
+        except Exception as e:
+            await message.edit_text(
+                f"<b>Error:</b> <code>Failed to paste to Telegraph: {format_exc(e)}</code>"
+            )
     except Exception as e:
         await message.edit_text(f"An error occurred: {format_exc(e)}")
 
@@ -306,15 +340,87 @@ async def gemini(client: Client, message: Message):
                     except Exception as e:
                         await message.edit_text(f"<b>Error listing models:</b> <code>{format_exc(e)}</code>")
                     return
-                if action == "show":
-                    model_name = db.get("custom.gemini", "model", "gemini-1.5-flash")
-                    await message.edit_text(
-                        f"<b>Current Gemini model:</b> <code>{model_name}</code>"
-                    )
-                    return
             await message.edit_text(
-                f"<b>Usage:</b> <code>{prefix}gemini model [set|list|show]</code>"
+                f"<b>Usage:</b> <code>{prefix}gemini model [set|list]</code>"
             )
+            return
+
+        if sub_command == "telegraph":
+            if len(command) > 2:
+                action = command[2]
+                if action == "on":
+                    db.set("custom.gemini", "telegraph_on", True)
+                    await message.edit_text("<b>Telegraph posting is now ON.</b>")
+                elif action == "off":
+                    db.set("custom.gemini", "telegraph_on", False)
+                    await message.edit_text("<b>Telegraph posting is now OFF.</b>")
+                else:
+                    await message.edit_text(
+                        f"<b>Usage:</b> <code>{prefix}gemini telegraph [on|off]</code>"
+                    )
+            else:
+                is_on = db.get("custom.gemini", "telegraph_on", True)
+                status = "ON" if is_on else "OFF"
+                await message.edit_text(f"<b>Telegraph posting is currently {status}.</b>")
+            return
+
+        if sub_command == "telegraph_name":
+            if len(command) > 2:
+                name = " ".join(command[2:])
+                db.set("custom.gemini", "telegraph_short_name", name)
+                await message.edit_text(f"<b>Telegraph short name set to:</b> <code>{name}</code>")
+            else:
+                await message.edit_text(
+                    f"<b>Usage:</b> <code>{prefix}gemini telegraph_name [name]</code>"
+                )
+            return
+
+        if sub_command == "settings":
+            model_name = db.get("custom.gemini", "model", "gemini-1.5-flash")
+            max_tokens = db.get("custom.gemini", "max_tokens", "Not set")
+            active_prompt = db.get("custom.gemini", "active_prompt", "Not set")
+            context_status = "ON" if db.get("custom.gemini", "context_on", False) else "OFF"
+            context_expiry = db.get("custom.gemini", "context_expiration_minutes", 5)
+            telegraph_status = "ON" if db.get("custom.gemini", "telegraph_on", True) else "OFF"
+            telegraph_name = db.get("custom.gemini", "telegraph_short_name", "Moonbot")
+
+            settings_text = (
+                f"<b>Gemini Settings:</b>\n"
+                f"• <b>Model:</b> <code>{model_name}</code>\n"
+                f"• <b>Max Tokens:</b> <code>{max_tokens}</code>\n"
+                f"• <b>Active Prompt:</b> <code>{active_prompt}</code>\n"
+                f"• <b>Context:</b> <code>{context_status}</code>\n"
+                f"• <b>Context Expiration:</b> <code>{context_expiry} minutes</code>\n"
+                f"• <b>Telegraph Posting:</b> <code>{telegraph_status}</code>\n"
+                f"• <b>Telegraph Name:</b> <code>{telegraph_name}</code>"
+            )
+            await message.edit_text(settings_text)
+            return
+
+        if sub_command == "max_tokens":
+            if len(command) > 2:
+                value = command[2]
+                if value.lower() == 'clear':
+                    db.set("custom.gemini", "max_tokens", None)
+                    await message.edit_text("<b>Gemini max_tokens setting cleared.</b>")
+                else:
+                    try:
+                        max_tokens = int(value)
+                        if max_tokens <= 0:
+                            await message.edit_text("<b>max_tokens must be a positive integer.</b>")
+                        else:
+                            db.set("custom.gemini", "max_tokens", max_tokens)
+                            await message.edit_text(f"<b>Gemini max_tokens set to:</b> <code>{max_tokens}</code>")
+                    except ValueError:
+                        await message.edit_text("<b>Invalid number for max_tokens.</b>")
+            else:
+                max_tokens = db.get("custom.gemini", "max_tokens")
+                if max_tokens:
+                    await message.edit_text(f"<b>Current max_tokens:</b> <code>{max_tokens}</code>\n"
+                                          f"<b>Usage:</b> <code>{prefix}gemini max_tokens [number|clear]</code>")
+                else:
+                    await message.edit_text(f"<b>max_tokens is not set.</b>\n"
+                                          f"<b>Usage:</b> <code>{prefix}gemini max_tokens [number|clear]</code>")
             return
 
         if sub_command == "prompt":
@@ -472,11 +578,14 @@ async def gemini(client: Client, message: Message):
 
 
 modules_help["gemini"] = {
-    "gemini [prompt]*": "Ask questions with Gemini Ai (can reply to text or image).",
+    "gemini [prompt]*": "Ask questions with Gemini AI (can reply to text or image).",
     "gemini imgen [prompt]": "Generate an image or reply to an image to edit it.",
+    "gemini settings": "Show the current Gemini settings.",
+    "gemini telegraph [on|off]": "Toggle Telegraph posting for long messages.",
+    "gemini telegraph_name [name]": "Set the short name for Telegraph.",
     "gemini model set [model_name]": "Set the Gemini model to use.",
     "gemini model list": "List all available Gemini models.",
-    "gemini model show": "Show the current Gemini model.",
+    "gemini max_tokens [number|clear]": "Set or clear the max output tokens for Gemini.",
     "gemini prompt add [name] [prompt]": "Add a new system prompt.",
     "gemini prompt del [name]": "Delete a system prompt.",
     "gemini prompt list": "List all saved system prompts.",

@@ -65,14 +65,6 @@ async def _gemini_search(client: Client, message: Message):
             )
             return
 
-        prompt = "\n".join(prompt_parts)
-
-        if not prompt:
-            await message.edit_text(
-                f"<b>Usage: </b><code>{prefix}google search [query]</code>"
-            )
-            return
-
         model_name = db.get("custom.gemini_search", "search_model", "gemini-2.0-flash")
 
         # List of models that support grounding
@@ -86,7 +78,7 @@ async def _gemini_search(client: Client, message: Message):
             return
 
         # Use Google Search for grounding
-        max_output_tokens = db.get("custom.gemini_search", "max_output_tokens", 1024)
+        max_output_tokens = db.get("custom.gemini_search", "max_output_tokens", 0)
 
         system_prompt = db.get("custom.gemini_search", "active_prompt")
         if system_prompt:
@@ -108,12 +100,12 @@ async def _gemini_search(client: Client, message: Message):
             safety_settings=safety_settings,
             max_output_tokens=max_output_tokens if max_output_tokens > 0 else None,
             tools=[
-            types.Tool(
-                google_search=types.GoogleSearch()
-            )
-        ]
-
+                types.Tool(
+                    google_search=types.GoogleSearch()
+                )
+            ]
         )
+
         response = client.models.generate_content(
             model=model_name,
             contents=contents,
@@ -145,46 +137,36 @@ async def gemini(client: Client, message: Message):
     if len(command) > 1:
         sub_command = command[1]
 
-        if sub_command == "config":
-            if (len(command) > 2 and command[2] == "show") or len(command) == 2:
-                model_name = db.get("custom.gemini_search", "model", "gemini-1.5-flash")
-                search_model_name = db.get("custom.gemini_search", "search_model", "gemini-1.5-flash")
-                active_prompt = db.get("custom.gemini_search", "active_prompt", "Default")
-                context_expiry = db.get("custom.gemini_search", "context_expiration_minutes", 5)
-                max_tokens = db.get("custom.gemini_search", "max_output_tokens", 1024)
+        if sub_command == "settings":
+            model_name = db.get("custom.gemini_search", "model", "gemini-1.5-flash")
+            search_model_name = db.get("custom.gemini_search", "search_model", "gemini-1.5-flash")
+            active_prompt = db.get("custom.gemini_search", "active_prompt", "Default")
+            context_expiry = db.get("custom.gemini_search", "context_expiration_minutes", 5)
+            max_tokens = db.get("custom.gemini_search", "max_output_tokens", 0)
 
-                await message.edit_text(f"<b>Gemini Search Configuration:</b>\n\n"
-                                      f"• **Search Model:** <code>{search_model_name}</code>\n"
-                                      f"• **Active Prompt:** <code>{active_prompt}</code>\n"
-                                      f"• **Max Tokens:** <code>{max_tokens if max_tokens > 0 else 'Default'}</code>")
-                return
-            await message.edit_text(
-                f"<b>Usage:</b> <code>{prefix}google config</code>"
-            )
+            await message.edit_text(f"<b>Gemini Search Settings:</b>\n\n"
+                                  f"• **Search Model:** <code>{search_model_name}</code>\n"
+                                  f"• **Active Prompt:** <code>{active_prompt}</code>\n"
+                                  f"• **Max Tokens:** <code>{max_tokens if max_tokens > 0 else 'Unlimited'}</code>")
             return
 
         if sub_command == "max_tokens":
-            if len(command) > 2 and command[2] == "set":
-                if len(command) > 3:
-                    try:
-                        tokens = int(command[3])
-                        if tokens < 0:
-                            await message.edit_text("<b>Max tokens must be a non-negative integer.</b>")
+            if len(command) > 2:
+                try:
+                    tokens = int(command[2])
+                    if tokens < 0:
+                        await message.edit_text("<b>Max tokens must be a non-negative integer.</b>")
+                    else:
+                        db.set("custom.gemini_search", "max_output_tokens", tokens)
+                        if tokens == 0:
+                            await message.edit_text("<b>Max output tokens limit cleared (unlimited).</b>")
                         else:
-                            db.set("custom.gemini_search", "max_output_tokens", tokens)
-                            if tokens == 0:
-                                await message.edit_text("<b>Max output tokens limit cleared.</b>")
-                            else:
-                                await message.edit_text(f"<b>Max output tokens set to {tokens}.</b>")
-                    except ValueError:
-                        await message.edit_text("<b>Invalid number for max tokens.</b>")
-                else:
-                    await message.edit_text(
-                        f"<b>Usage:</b> <code>{prefix}google max_tokens set [number]</code> (0 to clear)"
-                    )
+                            await message.edit_text(f"<b>Max output tokens set to {tokens}.</b>")
+                except ValueError:
+                    await message.edit_text("<b>Invalid number for max tokens.</b>")
             else:
                 await message.edit_text(
-                    f"<b>Usage:</b> <code>{prefix}google max_tokens set [number]</code>"
+                    f"<b>Usage:</b> <code>{prefix}google max_tokens [number]</code> (0 for unlimited)"
                 )
             return
             
@@ -295,11 +277,11 @@ async def gemini(client: Client, message: Message):
 
 
 modules_help["google"] = {
-    "google config": "Show current configurations.",
+    "google settings": "Show current configurations.",
     "google [query]": "Perform a search with Google Search grounding (for supported models).",
     "google model set [model_name]": "Set the Gemini model for search.",
     "google model list": "List available models that support Google Search grounding.",
-    "google config max_tokens [number]": "Set the max output tokens (0 to clear). Default is 1024.",
+    "google max_tokens [number]": "Set the max output tokens (0 for unlimited). Default is unlimited.",
     "google prompt add [name] [prompt]": "Add a new system prompt.",
     "google prompt del [name]": "Delete a system prompt.",
     "google prompt list": "List all saved system prompts.",
