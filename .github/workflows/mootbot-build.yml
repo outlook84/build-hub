@@ -33,6 +33,7 @@ jobs:
           cp gemini.py ./Moon-Userbot/modules/custom_modules/
           cp google.py ./Moon-Userbot/modules/custom_modules/
           cp aimage.py ./Moon-Userbot/modules/custom_modules/
+          cp ytdl.py ./Moon-Userbot/modules/custom_modules/
 
       - name: Get upstream commit SHA
         working-directory: ./${{ env.WORKDIR }}
