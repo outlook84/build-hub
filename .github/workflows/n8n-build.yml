@@ -17,6 +17,8 @@ jobs:
     permissions:
       contents: read
       packages: write # Needed to push to GitHub Packages
+    env:
+      WORKDIR: n8n
 
     steps:
       - name: Checkout repository
