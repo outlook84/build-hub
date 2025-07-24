@@ -6,7 +6,7 @@ COPY ./OpenList .
 
 RUN go mod download
 RUN apk add --no-cache bash curl jq git
-RUN bash build.sh release docker lite
+RUN bash build.sh release docker
 
 FROM scratch
 
