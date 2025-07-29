@@ -1,5 +1,7 @@
 #!/bin/sh
 
+cd /home/node/app
+
 if [ ! -e "config/config.yaml" ]; then
     echo "Resource not found, copying from defaults: config.yaml"
     cp -r "default/config.yaml" "config/config.yaml"
