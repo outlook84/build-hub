@@ -37,11 +37,12 @@ WORKDIR ${APP_HOME}
 # Set NODE_ENV to production
 ENV NODE_ENV=production
 
-COPY ./content ./content
+COPY ./content /content
 
 # Install system dependencies
 RUN apk add --no-cache git git-lfs runit \
     && ln -s /content/service/* /etc/service/ \
+    && chmod +x /content/service/*/run \
     && apk add --no-cache cloudflared --repository=http://dl-cdn.alpinelinux.org/alpine/edge/testing/ \
     && mkdir -p ${APP_HOME}/data
 
