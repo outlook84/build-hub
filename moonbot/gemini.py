@@ -3,6 +3,7 @@
 # YOu can check it out for uses example
 
 import io
+import re
 import asyncio
 from datetime import datetime, timedelta
 
@@ -25,6 +26,49 @@ genai.configure(api_key=gemini_key)
 
 # Setup Telegraph
 telegraph = telegraph_lib.Telegraph()
+
+
+def _parse_telegraph_node(node):
+    """Recursively parse Telegraph node object to text."""
+    if isinstance(node, str):
+        return node
+    if isinstance(node, dict):
+        content = ""
+        if "children" in node:
+            for child in node["children"]:
+                content += _parse_telegraph_node(child)
+        if node.get("tag") in [
+            "p",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+            "br",
+            "hr",
+            "li",
+            "blockquote",
+        ]:
+            content += "\n"
+        return content
+    return ""
+
+
+async def get_telegraph_content(url: str) -> str | None:
+    """Fetches and parses content from a Telegraph URL."""
+    match = re.match(r"https?://telegra\.ph/(.+)", url)
+    if not match:
+        return None
+    path = match.group(1)
+    try:
+        page = await asyncio.to_thread(telegraph.get_page, path, return_content=True)
+        content = ""
+        for node in page.get("content", []):
+            content += _parse_telegraph_node(node)
+        return content
+    except Exception:
+        return None
 
 
 # Thread-safety lock for chat history
@@ -162,21 +206,38 @@ async def _ask_gemini(client: Client, message: Message):
 
         command_text = message.text or message.caption or ""
         prompt_parts = []
+        replied_text = None
 
         if message.reply_to_message:
             replied_text = (
-                message.reply_to_message.text
-                or message.reply_to_message.caption
+                message.reply_to_message.text or message.reply_to_message.caption
             )
             if replied_text:
                 prompt_parts.append(replied_text)
 
+        command_prompt = None
         parts = command_text.split(maxsplit=1)
         if len(parts) > 1:
             command_prompt = parts[1]
             prompt_parts.append(command_prompt)
 
         prompt = "\n".join(prompt_parts)
+
+        telegraph_urls = re.findall(r"https?://telegra\.ph/\S+", prompt)
+        if telegraph_urls:
+            await message.edit_text(
+                "<code>Found Telegraph link, fetching content...</code>"
+            )
+            telegraph_content = ""
+            for url in telegraph_urls:
+                content = await get_telegraph_content(url)
+                if content:
+                    telegraph_content += content + "\n\n"
+            if telegraph_content:
+                prompt = (
+                    f"Context from Telegraph:\n{telegraph_content}\n\nMy prompt:\n{prompt}"
+                )
+            await message.edit_text("<code>Thinking...</code>")
 
         image_part = None
         media_to_process = None
@@ -185,7 +246,11 @@ async def _ask_gemini(client: Client, message: Message):
         elif message.reply_to_message:
             if message.reply_to_message.photo:
                 media_to_process = message.reply_to_message.photo
-            elif message.reply_to_message.sticker and not message.reply_to_message.sticker.is_animated and not message.reply_to_message.sticker.is_video:
+            elif (
+                message.reply_to_message.sticker
+                and not message.reply_to_message.sticker.is_animated
+                and not message.reply_to_message.sticker.is_video
+            ):
                 media_to_process = message.reply_to_message.sticker
 
         if media_to_process:
@@ -194,7 +259,9 @@ async def _ask_gemini(client: Client, message: Message):
                     "<b>Error:</b> <code>Image size is too large (max 10MB)</code>"
                 )
                 return
-            image_stream = await client.download_media(media_to_process, in_memory=True)
+            image_stream = await client.download_media(
+                media_to_process, in_memory=True
+            )
             if image_stream:
                 try:
                     pil_image = Image.open(image_stream)
@@ -231,18 +298,24 @@ async def _ask_gemini(client: Client, message: Message):
 
         if is_context_on:
             async with _chat_lock:
-                if user_id not in chat_history or \
-                   (user_id in last_interaction_time and \
-                    datetime.now() - last_interaction_time[user_id] > timedelta(minutes=context_expiration_minutes)):
+                if user_id not in chat_history or (
+                    user_id in last_interaction_time
+                    and datetime.now() - last_interaction_time[user_id]
+                    > timedelta(minutes=context_expiration_minutes)
+                ):
                     chat_history[user_id] = []
-                
+
                 last_interaction_time[user_id] = datetime.now()
-                
+
                 chat = model.start_chat(history=chat_history[user_id])
-                response = await chat.send_message_async(contents, generation_config=generation_config)
+                response = await chat.send_message_async(
+                    contents, generation_config=generation_config
+                )
                 chat_history[user_id] = chat.history
         else:
-            response = await model.generate_content_async(contents, generation_config=generation_config)
+            response = await model.generate_content_async(
+                contents, generation_config=generation_config
+            )
 
         output_text = ""
         if response.parts:
@@ -251,17 +324,41 @@ async def _ask_gemini(client: Client, message: Message):
         if response.candidates[0].finish_reason.name == "MAX_TOKENS":
             output_text += "\n\n[...Output truncated due to max_tokens limit...]"
 
+        question_text = ""
         if prompt:
-            processed_prompt = prompt.replace('\n', '\n> ')
-            question_text = f"👤**Prompt:**\n> {processed_prompt}"
-        else:
-            question_text = ""
+            display_prompt = None
+            if command_prompt:
+                display_prompt = command_prompt
+            elif replied_text and (
+                not message.reply_to_message.from_user
+                or not message.reply_to_message.from_user.is_self
+            ):
+                display_prompt = replied_text
 
-        processed_response = output_text.replace('\n', '\n> ')
-        formatted_response = f"🤖**Response:**\n> {processed_response}"
+            if display_prompt:
+                if len(display_prompt) > 200:
+                    display_prompt = display_prompt[:200] + "..."
+                processed_prompt = display_prompt.replace("\n", "\n> ")
+                question_text = f"👤**Prompt:**\n> {processed_prompt}"
+
+        processed_response = output_text.replace("\n", "\n> ")
+        full_response_text = f"{question_text}\n🤖**Response:**\n> {processed_response}\nPowered by Gemini"
+
+        telegraph_char_limit = db.get("custom.gemini", "telegraph_char_limit")
+        if (
+            telegraph_char_limit
+            and len(full_response_text) > telegraph_char_limit
+            and db.get("custom.gemini", "telegraph_on", True)
+        ):
+            await message.edit_text(
+                "<code>Output is long... Pasting to Telegraph...</code>"
+            )
+            return await post_to_telegraph(
+                message, output_text, question_text, command_prompt, replied_text
+            )
 
         await message.edit_text(
-            f"{question_text}\n{formatted_response}\nPowered by Gemini",
+            full_response_text,
             parse_mode=enums.ParseMode.MARKDOWN,
         )
     except MessageTooLong:
@@ -275,23 +372,86 @@ async def _ask_gemini(client: Client, message: Message):
         await message.edit_text(
             "<code>Output is too long... Pasting to Telegraph...</code>"
         )
+        await post_to_telegraph(
+            message, output_text, question_text, command_prompt, replied_text
+        )
+    except Exception as e:
+        await message.edit_text(f"An error occurred: {format_exc(e)}")
+
+
+async def post_to_telegraph(
+    message: Message, output_text: str, question_text: str, command_prompt, replied_text
+):
+    """Posts the response to Telegraph."""
+    try:
+        short_name = db.get("custom.gemini", "telegraph_short_name", "Moonbot")
+        telegraph.create_account(short_name=short_name, replace_token=True)
+        response_text = output_text.replace("\n", "<br>")
+        page = await asyncio.to_thread(
+            telegraph.create_page,
+            title="Gemini Response",
+            html_content=f"<p>{response_text}</p><br><em>Powered by Gemini</em>",
+        )
+        telegraph_url = page["url"]
+
+        # Re-create question_text for telegraph response
+        question_text = ""
+        if command_prompt or replied_text:
+            display_prompt = None
+            if command_prompt:
+                display_prompt = command_prompt
+            elif replied_text and (
+                not message.reply_to_message.from_user
+                or not message.reply_to_message.from_user.is_self
+            ):
+                display_prompt = replied_text
+
+            if display_prompt:
+                if len(display_prompt) > 200:
+                    display_prompt = display_prompt[:200] + "..."
+                processed_prompt = display_prompt.replace("\n", "\n> ")
+                question_text = f"👤**Prompt:**\n> {processed_prompt}"
+
+        formatted_response = f"🤖**Response:**\n> {telegraph_url}"
+
+        await message.edit_text(
+            f"{question_text}\n{formatted_response}\nPowered by Gemini",
+            disable_web_page_preview=False,
+            parse_mode=enums.ParseMode.MARKDOWN,
+        )
+    except Exception as e:
+        await message.edit_text(
+            f"<b>Error:</b> <code>Failed to paste to Telegraph: {format_exc(e)}</code>"
+        )
         try:
             short_name = db.get("custom.gemini", "telegraph_short_name", "Moonbot")
             telegraph.create_account(short_name=short_name, replace_token=True)
-            response_text = output_text.replace('\n', '<br>')
+            response_text = output_text.replace("\n", "<br>")
             page = await asyncio.to_thread(
                 telegraph.create_page,
                 title="Gemini Response",
-                html_content=f"<p>{response_text}</p><br><em>Powered by Gemini</em>"
+                html_content=f"<p>{response_text}</p><br><em>Powered by Gemini</em>",
             )
-            telegraph_url = page['url']
+            telegraph_url = page["url"]
 
+            # Re-create question_text for telegraph response
+            question_text = ""
             if prompt:
-                processed_prompt = prompt.replace('\n', '\n> ')
-                question_text = f"👤**Prompt:**\n> {processed_prompt}"
-            else:
-                question_text = ""
-            
+                display_prompt = None
+                if command_prompt:
+                    display_prompt = command_prompt
+                elif replied_text and (
+                    not message.reply_to_message.from_user
+                    or not message.reply_to_message.from_user.is_self
+                ):
+                    display_prompt = replied_text
+
+                if display_prompt:
+                    if len(display_prompt) > 200:
+                        display_prompt = display_prompt[:200] + "..."
+                    processed_prompt = display_prompt.replace("\n", "\n> ")
+                    question_text = f"👤**Prompt:**\n> {processed_prompt}"
+
             formatted_response = f"🤖**Response:**\n> {telegraph_url}"
 
             await message.edit_text(
@@ -375,6 +535,44 @@ async def gemini(client: Client, message: Message):
                 )
             return
 
+        if sub_command == "telegraph_limit":
+            if len(command) > 2:
+                value = command[2]
+                if value.lower() == "clear":
+                    db.set("custom.gemini", "telegraph_char_limit", None)
+                    await message.edit_text(
+                        "<b>Telegraph character limit cleared.</b>"
+                    )
+                else:
+                    try:
+                        limit = int(value)
+                        if limit <= 0:
+                            await message.edit_text(
+                                "<b>Character limit must be a positive integer.</b>"
+                            )
+                        else:
+                            db.set("custom.gemini", "telegraph_char_limit", limit)
+                            await message.edit_text(
+                                f"<b>Telegraph character limit set to:</b> <code>{limit}</code>"
+                            )
+                    except ValueError:
+                        await message.edit_text(
+                            "<b>Invalid number for character limit.</b>"
+                        )
+            else:
+                limit = db.get("custom.gemini", "telegraph_char_limit")
+                if limit:
+                    await message.edit_text(
+                        f"<b>Current character limit:</b> <code>{limit}</code>\n"
+                        f"<b>Usage:</b> <code>{prefix}gemini telegraph_limit [number|clear]</code>"
+                    )
+                else:
+                    await message.edit_text(
+                        f"<b>Character limit is not set.</b>\n"
+                        f"<b>Usage:</b> <code>{prefix}gemini telegraph_limit [number|clear]</code>"
+                    )
+            return
+
         if sub_command == "settings":
             model_name = db.get("custom.gemini", "model", "gemini-1.5-flash")
             max_tokens = db.get("custom.gemini", "max_tokens", "Not set")
@@ -383,6 +581,7 @@ async def gemini(client: Client, message: Message):
             context_expiry = db.get("custom.gemini", "context_expiration_minutes", 5)
             telegraph_status = "ON" if db.get("custom.gemini", "telegraph_on", True) else "OFF"
             telegraph_name = db.get("custom.gemini", "telegraph_short_name", "Moonbot")
+            telegraph_limit = db.get("custom.gemini", "telegraph_char_limit", "Not set")
 
             settings_text = (
                 f"<b>Gemini Settings:</b>\n"
@@ -392,7 +591,8 @@ async def gemini(client: Client, message: Message):
                 f"• <b>Context:</b> <code>{context_status}</code>\n"
                 f"• <b>Context Expiration:</b> <code>{context_expiry} minutes</code>\n"
                 f"• <b>Telegraph Posting:</b> <code>{telegraph_status}</code>\n"
-                f"• <b>Telegraph Name:</b> <code>{telegraph_name}</code>"
+                f"• <b>Telegraph Name:</b> <code>{telegraph_name}</code>\n"
+                f"• <b>Telegraph Char Limit:</b> <code>{telegraph_limit}</code>"
             )
             await message.edit_text(settings_text)
             return
@@ -583,6 +783,7 @@ modules_help["gemini"] = {
     "gemini settings": "Show the current Gemini settings.",
     "gemini telegraph [on|off]": "Toggle Telegraph posting for long messages.",
     "gemini telegraph_name [name]": "Set the short name for Telegraph.",
+    "gemini telegraph_limit [number|clear]": "Set a character limit to auto-post to Telegraph.",
     "gemini model set [model_name]": "Set the Gemini model to use.",
     "gemini model list": "List all available Gemini models.",
     "gemini max_tokens [number|clear]": "Set or clear the max output tokens for Gemini.",
