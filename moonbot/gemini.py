@@ -21,6 +21,7 @@ from utils.config import gemini_key
 
 genai = import_library("google.generativeai", "google-generativeai")
 telegraph_lib = import_library("telegraph", "telegraph")
+markdown = import_library("markdown", "Markdown")
 
 genai.configure(api_key=gemini_key)
 
@@ -200,6 +201,26 @@ async def _gemini_imgen(client: Client, message: Message):
         await message.edit_text(f"An unexpected error occurred: {format_exc(e)}")
 
 
+def _get_question_text(message: Message, command_prompt: str, replied_text: str) -> str:
+    """Formats the question part of the response."""
+    question_text = ""
+    display_prompt = None
+    if command_prompt:
+        display_prompt = command_prompt
+    elif replied_text and (
+        not message.reply_to_message.from_user
+        or not message.reply_to_message.from_user.is_self
+    ):
+        display_prompt = replied_text
+
+    if display_prompt:
+        if len(display_prompt) > 200:
+            display_prompt = display_prompt[:200] + "..."
+        processed_prompt = display_prompt.replace("\n", "\n> ")
+        question_text = f"👤**Prompt:**\n> {processed_prompt}"
+    return question_text
+
+
 async def _ask_gemini(client: Client, message: Message):
     try:
         await message.edit_text("<code>Thinking...</code>")
@@ -324,22 +345,7 @@ async def _ask_gemini(client: Client, message: Message):
         if response.candidates[0].finish_reason.name == "MAX_TOKENS":
             output_text += "\n\n[...Output truncated due to max_tokens limit...]"
 
-        question_text = ""
-        if prompt:
-            display_prompt = None
-            if command_prompt:
-                display_prompt = command_prompt
-            elif replied_text and (
-                not message.reply_to_message.from_user
-                or not message.reply_to_message.from_user.is_self
-            ):
-                display_prompt = replied_text
-
-            if display_prompt:
-                if len(display_prompt) > 200:
-                    display_prompt = display_prompt[:200] + "..."
-                processed_prompt = display_prompt.replace("\n", "\n> ")
-                question_text = f"👤**Prompt:**\n> {processed_prompt}"
+        question_text = _get_question_text(message, command_prompt, replied_text)
 
         processed_response = output_text.replace("\n", "\n> ")
         full_response_text = f"{question_text}\n🤖**Response:**\n> {processed_response}\nPowered by Gemini"
@@ -354,7 +360,7 @@ async def _ask_gemini(client: Client, message: Message):
                 "<code>Output is long... Pasting to Telegraph...</code>"
             )
             return await post_to_telegraph(
-                message, output_text, question_text, command_prompt, replied_text
+                message, output_text, command_prompt, replied_text
             )
 
         await message.edit_text(
@@ -373,45 +379,34 @@ async def _ask_gemini(client: Client, message: Message):
             "<code>Output is too long... Pasting to Telegraph...</code>"
         )
         await post_to_telegraph(
-            message, output_text, question_text, command_prompt, replied_text
+            message, output_text, command_prompt, replied_text
         )
     except Exception as e:
         await message.edit_text(f"An error occurred: {format_exc(e)}")
 
 
 async def post_to_telegraph(
-    message: Message, output_text: str, question_text: str, command_prompt, replied_text
+    message: Message, output_text: str, command_prompt: str, replied_text: str
 ):
     """Posts the response to Telegraph."""
     try:
         short_name = db.get("custom.gemini", "telegraph_short_name", "Moonbot")
         telegraph.create_account(short_name=short_name, replace_token=True)
-        response_text = output_text.replace("\n", "<br>")
+        if markdown:
+            response_text = markdown.markdown(output_text)
+            # Replace unsupported tags
+            response_text = response_text.replace("<h1>", "<h3>").replace("</h1>", "</h3>")
+            response_text = response_text.replace("<h2>", "<h4>").replace("</h2>", "</h4>")
+        else:
+            response_text = output_text.replace("\n", "<br>")
         page = await asyncio.to_thread(
             telegraph.create_page,
             title="Gemini Response",
-            html_content=f"<p>{response_text}</p><br><em>Powered by Gemini</em>",
+            html_content=f"{response_text}<br><em>Powered by Gemini</em>",
         )
         telegraph_url = page["url"]
 
-        # Re-create question_text for telegraph response
-        question_text = ""
-        if command_prompt or replied_text:
-            display_prompt = None
-            if command_prompt:
-                display_prompt = command_prompt
-            elif replied_text and (
-                not message.reply_to_message.from_user
-                or not message.reply_to_message.from_user.is_self
-            ):
-                display_prompt = replied_text
-
-            if display_prompt:
-                if len(display_prompt) > 200:
-                    display_prompt = display_prompt[:200] + "..."
-                processed_prompt = display_prompt.replace("\n", "\n> ")
-                question_text = f"👤**Prompt:**\n> {processed_prompt}"
-
+        question_text = _get_question_text(message, command_prompt, replied_text)
         formatted_response = f"🤖**Response:**\n> {telegraph_url}"
 
         await message.edit_text(
@@ -423,49 +418,295 @@ async def post_to_telegraph(
         await message.edit_text(
             f"<b>Error:</b> <code>Failed to paste to Telegraph: {format_exc(e)}</code>"
         )
-        try:
-            short_name = db.get("custom.gemini", "telegraph_short_name", "Moonbot")
-            telegraph.create_account(short_name=short_name, replace_token=True)
-            response_text = output_text.replace("\n", "<br>")
-            page = await asyncio.to_thread(
-                telegraph.create_page,
-                title="Gemini Response",
-                html_content=f"<p>{response_text}</p><br><em>Powered by Gemini</em>",
-            )
-            telegraph_url = page["url"]
 
-            # Re-create question_text for telegraph response
-            question_text = ""
-            if prompt:
-                display_prompt = None
-                if command_prompt:
-                    display_prompt = command_prompt
-                elif replied_text and (
-                    not message.reply_to_message.from_user
-                    or not message.reply_to_message.from_user.is_self
-                ):
-                    display_prompt = replied_text
+# --- Sub-command Handlers ---
 
-                if display_prompt:
-                    if len(display_prompt) > 200:
-                        display_prompt = display_prompt[:200] + "..."
-                    processed_prompt = display_prompt.replace("\n", "\n> ")
-                    question_text = f"👤**Prompt:**\n> {processed_prompt}"
+async def _handle_model_subcommand(message: Message, command: list):
+    if len(command) > 2:
+        action = command[2]
+        if action == "set":
+            if len(command) > 3:
+                model_name = command[3]
+                db.set("custom.gemini", "model", model_name)
+                await message.edit_text(
+                    f"<b>Gemini model set to:</b> <code>{model_name}</code>"
+                )
+            else:
+                await message.edit_text(
+                    f"<b>Usage:</b> <code>{prefix}gemini model set [model_name]</code>"
+                )
+            return
+        if action == "list":
+            try:
+                models = [m.name.replace("models/", "") for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+                model_list = "\n".join([f"• <code>{model}</code>" for model in models])
+                await message.edit_text(f"<b>Available Gemini models:</b>\n{model_list}")
+            except Exception as e:
+                await message.edit_text(f"<b>Error listing models:</b> <code>{format_exc(e)}</code>")
+            return
+    await message.edit_text(
+        f"<b>Usage:</b> <code>{prefix}gemini model [set|list]</code>"
+    )
 
-            formatted_response = f"🤖**Response:**\n> {telegraph_url}"
-
+async def _handle_telegraph_subcommand(message: Message, command: list):
+    if len(command) > 2:
+        action = command[2]
+        if action == "on":
+            db.set("custom.gemini", "telegraph_on", True)
+            await message.edit_text("<b>Telegraph posting is now ON.</b>")
+        elif action == "off":
+            db.set("custom.gemini", "telegraph_on", False)
+            await message.edit_text("<b>Telegraph posting is now OFF.</b>")
+        else:
             await message.edit_text(
-                f"{question_text}\n{formatted_response}\nPowered by Gemini",
-                disable_web_page_preview=False,
-                parse_mode=enums.ParseMode.MARKDOWN,
+                f"<b>Usage:</b> <code>{prefix}gemini telegraph [on|off]</code>"
             )
-        except Exception as e:
-            await message.edit_text(
-                f"<b>Error:</b> <code>Failed to paste to Telegraph: {format_exc(e)}</code>"
-            )
-    except Exception as e:
-        await message.edit_text(f"An error occurred: {format_exc(e)}")
+    else:
+        is_on = db.get("custom.gemini", "telegraph_on", True)
+        status = "ON" if is_on else "OFF"
+        await message.edit_text(f"<b>Telegraph posting is currently {status}.</b>")
 
+async def _handle_telegraph_name_subcommand(message: Message, command: list):
+    if len(command) > 2:
+        name = " ".join(command[2:])
+        db.set("custom.gemini", "telegraph_short_name", name)
+        await message.edit_text(f"<b>Telegraph short name set to:</b> <code>{name}</code>")
+    else:
+        await message.edit_text(
+            f"<b>Usage:</b> <code>{prefix}gemini telegraph_name [name]</code>"
+        )
+
+async def _handle_telegraph_limit_subcommand(message: Message, command: list):
+    if len(command) > 2:
+        value = command[2]
+        if value.lower() == "clear":
+            db.set("custom.gemini", "telegraph_char_limit", None)
+            await message.edit_text(
+                "<b>Telegraph character limit cleared.</b>"
+            )
+        else:
+            try:
+                limit = int(value)
+                if limit <= 0:
+                    await message.edit_text(
+                        "<b>Character limit must be a positive integer.</b>"
+                    )
+                else:
+                    db.set("custom.gemini", "telegraph_char_limit", limit)
+                    await message.edit_text(
+                        f"<b>Telegraph character limit set to:</b> <code>{limit}</code>"
+                    )
+            except ValueError:
+                await message.edit_text(
+                    "<b>Invalid number for character limit.</b>"
+                )
+    else:
+        limit = db.get("custom.gemini", "telegraph_char_limit")
+        if limit:
+            await message.edit_text(
+                f"<b>Current character limit:</b> <code>{limit}</code>\n"
+                f"<b>Usage:</b> <code>{prefix}gemini telegraph_limit [number|clear]</code>"
+            )
+        else:
+            await message.edit_text(
+                f"<b>Character limit is not set.</b>\n"
+                f"<b>Usage:</b> <code>{prefix}gemini telegraph_limit [number|clear]</code>"
+            )
+
+async def _handle_settings_subcommand(message: Message):
+    model_name = db.get("custom.gemini", "model", "gemini-1.5-flash")
+    max_tokens = db.get("custom.gemini", "max_tokens", "Not set")
+    active_prompt = db.get("custom.gemini", "active_prompt", "Not set")
+    context_status = "ON" if db.get("custom.gemini", "context_on", False) else "OFF"
+    context_expiry = db.get("custom.gemini", "context_expiration_minutes", 5)
+    telegraph_status = "ON" if db.get("custom.gemini", "telegraph_on", True) else "OFF"
+    telegraph_name = db.get("custom.gemini", "telegraph_short_name", "Moonbot")
+    telegraph_limit = db.get("custom.gemini", "telegraph_char_limit", "Not set")
+
+    settings_text = (
+        f"<b>Gemini Settings:</b>\n"
+        f"• <b>Model:</b> <code>{model_name}</code>\n"
+        f"• <b>Max Tokens:</b> <code>{max_tokens}</code>\n"
+        f"• <b>Active Prompt:</b> <code>{active_prompt}</code>\n"
+        f"• <b>Context:</b> <code>{context_status}</code>\n"
+        f"• <b>Context Expiration:</b> <code>{context_expiry} minutes</code>\n"
+        f"• <b>Telegraph Posting:</b> <code>{telegraph_status}</code>\n"
+        f"• <b>Telegraph Name:</b> <code>{telegraph_name}</code>\n"
+        f"• <b>Telegraph Char Limit:</b> <code>{telegraph_limit}</code>"
+    )
+    await message.edit_text(settings_text)
+
+async def _handle_max_tokens_subcommand(message: Message, command: list):
+    if len(command) > 2:
+        value = command[2]
+        if value.lower() == 'clear':
+            db.set("custom.gemini", "max_tokens", None)
+            await message.edit_text("<b>Gemini max_tokens setting cleared.</b>")
+        else:
+            try:
+                max_tokens = int(value)
+                if max_tokens <= 0:
+                    await message.edit_text("<b>max_tokens must be a positive integer.</b>")
+                else:
+                    db.set("custom.gemini", "max_tokens", max_tokens)
+                    await message.edit_text(f"<b>Gemini max_tokens set to:</b> <code>{max_tokens}</code>")
+            except ValueError:
+                await message.edit_text("<b>Invalid number for max_tokens.</b>")
+    else:
+        max_tokens = db.get("custom.gemini", "max_tokens")
+        if max_tokens:
+            await message.edit_text(f"<b>Current max_tokens:</b> <code>{max_tokens}</code>\n"
+                                  f"<b>Usage:</b> <code>{prefix}gemini max_tokens [number|clear]</code>")
+        else:
+            await message.edit_text(f"<b>max_tokens is not set.</b>\n"
+                                  f"<b>Usage:</b> <code>{prefix}gemini max_tokens [number|clear]</code>")
+
+async def _handle_prompt_subcommand(message: Message, command: list):
+    if len(command) > 2:
+        action = command[2]
+        if action == "add":
+            if len(command) > 3:
+                prompt_name = command[3]
+                prompt_text = " ".join(command[4:])
+                if not prompt_text:
+                    await message.edit_text(
+                        f"<b>Usage:</b> <code>{prefix}gemini prompt add [name] [prompt]</code>"
+                    )
+                    return
+                prompts = db.get("custom.gemini", "prompts", {})
+                prompts[prompt_name] = prompt_text
+                db.set("custom.gemini", "prompts", prompts)
+                await message.edit_text(
+                    f"<b>System prompt '{prompt_name}' added.</b>"
+                )
+            else:
+                await message.edit_text(
+                    f"<b>Usage:</b> <code>{prefix}gemini prompt add [name] [prompt]</code>"
+                )
+            return
+        if action == "del":
+            if len(command) > 3:
+                prompt_name = command[3]
+                prompts = db.get("custom.gemini", "prompts", {})
+                if prompt_name in prompts:
+                    del prompts[prompt_name]
+                    db.set("custom.gemini", "prompts", prompts)
+                    await message.edit_text(
+                        f"<b>System prompt '{prompt_name}' deleted.</b>"
+                    )
+                else:
+                    await message.edit_text(
+                        f"<b>System prompt '{prompt_name}' not found.</b>"
+                    )
+            else:
+                await message.edit_text(
+                    f"<b>Usage:</b> <code>{prefix}gemini prompt del [name]</code>"
+                )
+            return
+        if action == "list":
+            prompts = db.get("custom.gemini", "prompts", {})
+            if prompts:
+                response_text = "**Available system prompts:**\n\n"
+                for name, content in prompts.items():
+                    response_text += f"• `{name}`:\n> {content.replace(chr(10), chr(10) + '> ')}\n"
+                await message.edit_text(response_text, parse_mode=enums.ParseMode.MARKDOWN)
+            else:
+                await message.edit_text("**No system prompts saved.**")
+            return
+        if action == "set":
+            if len(command) > 3:
+                prompt_name = command[3]
+                prompts = db.get("custom.gemini", "prompts", {})
+                if prompt_name in prompts:
+                    db.set("custom.gemini", "active_prompt", prompt_name)
+                    await message.edit_text(
+                        f"<b>Active system prompt set to:</b> <code>{prompt_name}</code>"
+                    )
+                else:
+                    await message.edit_text(
+                        f"<b>System prompt '{prompt_name}' not found.</b>"
+                    )
+            else:
+                await message.edit_text(
+                    f"<b>Usage:</b> <code>{prefix}gemini prompt set [name]</code>"
+                )
+            return
+    await message.edit_text(
+        f"<b>Usage:</b> <code>{prefix}gemini prompt [add|del|list|set]</code>"
+    )
+
+async def _handle_context_subcommand(message: Message, command: list):
+    if len(command) > 2:
+        action = command[2]
+        if action == "on":
+            db.set("custom.gemini", "context_on", True)
+            await message.edit_text("<b>Gemini context is now ON.</b>")
+        elif action == "off":
+            db.set("custom.gemini", "context_on", False)
+            await message.edit_text("<b>Gemini context is now OFF.</b>")
+        elif action == "clear":
+            user_id = message.from_user.id
+            async with _chat_lock:
+                if user_id in chat_history:
+                    del chat_history[user_id]
+                if user_id in last_interaction_time:
+                    del last_interaction_time[user_id]
+            await message.edit_text("<b>Gemini chat history cleared.</b>")
+        elif action == "show":
+            user_id = message.from_user.id
+            user_chat_history = chat_history.get(user_id, [])
+            if user_chat_history:
+                response_text = "**Current chat history:**\n\n"
+                for item in user_chat_history:
+                    role = item.role.capitalize()
+                    
+                    text_parts = [p.text for p in item.parts if hasattr(p, 'text') and p.text]
+                    
+                    # Correctly check for actual image data
+                    has_image = any(
+                        hasattr(p, 'inline_data') and p.inline_data and p.inline_data.data 
+                        for p in item.parts
+                    )
+
+                    if text_parts:
+                        full_content = " ".join(text_parts)
+                    elif has_image:
+                        full_content = "[Image]"
+                    else:
+                        full_content = "[Empty Message]"
+
+                    response_text += f"**{role}:**\n> {full_content.replace(chr(10), chr(10) + '> ')}\n"
+                await message.edit_text(response_text, parse_mode=enums.ParseMode.MARKDOWN)
+            else:
+                await message.edit_text("**Chat history is empty.**")
+        elif action == "expire":
+            if len(command) > 3:
+                try:
+                    minutes = int(command[3])
+                    if minutes <= 0:
+                        await message.edit_text("<b>Expiration time must be a positive integer.</b>")
+                    else:
+                        db.set("custom.gemini", "context_expiration_minutes", minutes)
+                        global context_expiration_minutes
+                        context_expiration_minutes = minutes
+                        await message.edit_text(f"<b>Gemini context expiration set to {minutes} minutes.</b>")
+                except ValueError:
+                    await message.edit_text("<b>Invalid number for minutes.</b>")
+            else:
+                current_expiry = db.get("custom.gemini", "context_expiration_minutes", 5)
+                await message.edit_text(f"<b>Current expiration time is {current_expiry} minutes.</b>\n"
+                                      f"<b>Usage:</b> <code>{prefix}gemini context expire [minutes]</code>")
+            return
+        else:
+            await message.edit_text(
+                f"<b>Usage:</b> <code>{prefix}gemini context [on|off|clear|show|expire]</code>"
+            )
+    else:
+        is_on = db.get("custom.gemini", "context_on", False)
+        status = "ON" if is_on else "OFF"
+        current_expiry = db.get("custom.gemini", "context_expiration_minutes", 5)
+        await message.edit_text(f"<b>Gemini context is currently {status}.</b>\n"
+                              f"<b>Expiration time is {current_expiry} minutes.</b>")
 
 @Client.on_message(filters.command("gemini", prefix) & filters.me)
 async def gemini(client: Client, message: Message):
@@ -473,308 +714,30 @@ async def gemini(client: Client, message: Message):
     if len(command) > 1:
         sub_command = command[1]
         
-        if sub_command == "imgen":
-            await _gemini_imgen(client, message)
-            return
-            
-        if sub_command == "model":
-            if len(command) > 2:
-                action = command[2]
-                if action == "set":
-                    if len(command) > 3:
-                        model_name = command[3]
-                        db.set("custom.gemini", "model", model_name)
-                        await message.edit_text(
-                            f"<b>Gemini model set to:</b> <code>{model_name}</code>"
-                        )
-                    else:
-                        await message.edit_text(
-                            f"<b>Usage:</b> <code>{prefix}gemini model set [model_name]</code>"
-                        )
-                    return
-                if action == "list":
-                    try:
-                        models = [m.name.replace("models/", "") for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                        model_list = "\n".join([f"• <code>{model}</code>" for model in models])
-                        await message.edit_text(f"<b>Available Gemini models:</b>\n{model_list}")
-                    except Exception as e:
-                        await message.edit_text(f"<b>Error listing models:</b> <code>{format_exc(e)}</code>")
-                    return
-            await message.edit_text(
-                f"<b>Usage:</b> <code>{prefix}gemini model [set|list]</code>"
-            )
-            return
+        sub_command_handlers = {
+            "imgen": _gemini_imgen,
+            "model": _handle_model_subcommand,
+            "telegraph": _handle_telegraph_subcommand,
+            "telegraph_name": _handle_telegraph_name_subcommand,
+            "telegraph_limit": _handle_telegraph_limit_subcommand,
+            "settings": _handle_settings_subcommand,
+            "max_tokens": _handle_max_tokens_subcommand,
+            "prompt": _handle_prompt_subcommand,
+            "context": _handle_context_subcommand,
+        }
 
-        if sub_command == "telegraph":
-            if len(command) > 2:
-                action = command[2]
-                if action == "on":
-                    db.set("custom.gemini", "telegraph_on", True)
-                    await message.edit_text("<b>Telegraph posting is now ON.</b>")
-                elif action == "off":
-                    db.set("custom.gemini", "telegraph_on", False)
-                    await message.edit_text("<b>Telegraph posting is now OFF.</b>")
-                else:
-                    await message.edit_text(
-                        f"<b>Usage:</b> <code>{prefix}gemini telegraph [on|off]</code>"
-                    )
+        handler = sub_command_handlers.get(sub_command)
+        
+        if handler:
+            if sub_command in ["imgen", "settings"]:
+                 await handler(client, message) if sub_command == "imgen" else await handler(message)
             else:
-                is_on = db.get("custom.gemini", "telegraph_on", True)
-                status = "ON" if is_on else "OFF"
-                await message.edit_text(f"<b>Telegraph posting is currently {status}.</b>")
-            return
-
-        if sub_command == "telegraph_name":
-            if len(command) > 2:
-                name = " ".join(command[2:])
-                db.set("custom.gemini", "telegraph_short_name", name)
-                await message.edit_text(f"<b>Telegraph short name set to:</b> <code>{name}</code>")
-            else:
-                await message.edit_text(
-                    f"<b>Usage:</b> <code>{prefix}gemini telegraph_name [name]</code>"
-                )
-            return
-
-        if sub_command == "telegraph_limit":
-            if len(command) > 2:
-                value = command[2]
-                if value.lower() == "clear":
-                    db.set("custom.gemini", "telegraph_char_limit", None)
-                    await message.edit_text(
-                        "<b>Telegraph character limit cleared.</b>"
-                    )
-                else:
-                    try:
-                        limit = int(value)
-                        if limit <= 0:
-                            await message.edit_text(
-                                "<b>Character limit must be a positive integer.</b>"
-                            )
-                        else:
-                            db.set("custom.gemini", "telegraph_char_limit", limit)
-                            await message.edit_text(
-                                f"<b>Telegraph character limit set to:</b> <code>{limit}</code>"
-                            )
-                    except ValueError:
-                        await message.edit_text(
-                            "<b>Invalid number for character limit.</b>"
-                        )
-            else:
-                limit = db.get("custom.gemini", "telegraph_char_limit")
-                if limit:
-                    await message.edit_text(
-                        f"<b>Current character limit:</b> <code>{limit}</code>\n"
-                        f"<b>Usage:</b> <code>{prefix}gemini telegraph_limit [number|clear]</code>"
-                    )
-                else:
-                    await message.edit_text(
-                        f"<b>Character limit is not set.</b>\n"
-                        f"<b>Usage:</b> <code>{prefix}gemini telegraph_limit [number|clear]</code>"
-                    )
-            return
-
-        if sub_command == "settings":
-            model_name = db.get("custom.gemini", "model", "gemini-1.5-flash")
-            max_tokens = db.get("custom.gemini", "max_tokens", "Not set")
-            active_prompt = db.get("custom.gemini", "active_prompt", "Not set")
-            context_status = "ON" if db.get("custom.gemini", "context_on", False) else "OFF"
-            context_expiry = db.get("custom.gemini", "context_expiration_minutes", 5)
-            telegraph_status = "ON" if db.get("custom.gemini", "telegraph_on", True) else "OFF"
-            telegraph_name = db.get("custom.gemini", "telegraph_short_name", "Moonbot")
-            telegraph_limit = db.get("custom.gemini", "telegraph_char_limit", "Not set")
-
-            settings_text = (
-                f"<b>Gemini Settings:</b>\n"
-                f"• <b>Model:</b> <code>{model_name}</code>\n"
-                f"• <b>Max Tokens:</b> <code>{max_tokens}</code>\n"
-                f"• <b>Active Prompt:</b> <code>{active_prompt}</code>\n"
-                f"• <b>Context:</b> <code>{context_status}</code>\n"
-                f"• <b>Context Expiration:</b> <code>{context_expiry} minutes</code>\n"
-                f"• <b>Telegraph Posting:</b> <code>{telegraph_status}</code>\n"
-                f"• <b>Telegraph Name:</b> <code>{telegraph_name}</code>\n"
-                f"• <b>Telegraph Char Limit:</b> <code>{telegraph_limit}</code>"
-            )
-            await message.edit_text(settings_text)
-            return
-
-        if sub_command == "max_tokens":
-            if len(command) > 2:
-                value = command[2]
-                if value.lower() == 'clear':
-                    db.set("custom.gemini", "max_tokens", None)
-                    await message.edit_text("<b>Gemini max_tokens setting cleared.</b>")
-                else:
-                    try:
-                        max_tokens = int(value)
-                        if max_tokens <= 0:
-                            await message.edit_text("<b>max_tokens must be a positive integer.</b>")
-                        else:
-                            db.set("custom.gemini", "max_tokens", max_tokens)
-                            await message.edit_text(f"<b>Gemini max_tokens set to:</b> <code>{max_tokens}</code>")
-                    except ValueError:
-                        await message.edit_text("<b>Invalid number for max_tokens.</b>")
-            else:
-                max_tokens = db.get("custom.gemini", "max_tokens")
-                if max_tokens:
-                    await message.edit_text(f"<b>Current max_tokens:</b> <code>{max_tokens}</code>\n"
-                                          f"<b>Usage:</b> <code>{prefix}gemini max_tokens [number|clear]</code>")
-                else:
-                    await message.edit_text(f"<b>max_tokens is not set.</b>\n"
-                                          f"<b>Usage:</b> <code>{prefix}gemini max_tokens [number|clear]</code>")
-            return
-
-        if sub_command == "prompt":
-            if len(command) > 2:
-                action = command[2]
-                if action == "add":
-                    if len(command) > 3:
-                        prompt_name = command[3]
-                        prompt_text = " ".join(command[4:])
-                        if not prompt_text:
-                            await message.edit_text(
-                                f"<b>Usage:</b> <code>{prefix}gemini prompt add [name] [prompt]</code>"
-                            )
-                            return
-                        prompts = db.get("custom.gemini", "prompts", {})
-                        prompts[prompt_name] = prompt_text
-                        db.set("custom.gemini", "prompts", prompts)
-                        await message.edit_text(
-                            f"<b>System prompt '{prompt_name}' added.</b>"
-                        )
-                    else:
-                        await message.edit_text(
-                            f"<b>Usage:</b> <code>{prefix}gemini prompt add [name] [prompt]</code>"
-                        )
-                    return
-                if action == "del":
-                    if len(command) > 3:
-                        prompt_name = command[3]
-                        prompts = db.get("custom.gemini", "prompts", {})
-                        if prompt_name in prompts:
-                            del prompts[prompt_name]
-                            db.set("custom.gemini", "prompts", prompts)
-                            await message.edit_text(
-                                f"<b>System prompt '{prompt_name}' deleted.</b>"
-                            )
-                        else:
-                            await message.edit_text(
-                                f"<b>System prompt '{prompt_name}' not found.</b>"
-                            )
-                    else:
-                        await message.edit_text(
-                            f"<b>Usage:</b> <code>{prefix}gemini prompt del [name]</code>"
-                        )
-                    return
-                if action == "list":
-                    prompts = db.get("custom.gemini", "prompts", {})
-                    if prompts:
-                        response_text = "**Available system prompts:**\n\n"
-                        for name, content in prompts.items():
-                            response_text += f"• `{name}`:\n> {content.replace(chr(10), chr(10) + '> ')}\n"
-                        await message.edit_text(response_text, parse_mode=enums.ParseMode.MARKDOWN)
-                    else:
-                        await message.edit_text("**No system prompts saved.**")
-                    return
-                if action == "set":
-                    if len(command) > 3:
-                        prompt_name = command[3]
-                        prompts = db.get("custom.gemini", "prompts", {})
-                        if prompt_name in prompts:
-                            db.set("custom.gemini", "active_prompt", prompt_name)
-                            await message.edit_text(
-                                f"<b>Active system prompt set to:</b> <code>{prompt_name}</code>"
-                            )
-                        else:
-                            await message.edit_text(
-                                f"<b>System prompt '{prompt_name}' not found.</b>"
-                            )
-                    else:
-                        await message.edit_text(
-                            f"<b>Usage:</b> <code>{prefix}gemini prompt set [name]</code>"
-                        )
-                    return
-            await message.edit_text(
-                f"<b>Usage:</b> <code>{prefix}gemini prompt [add|del|list|set]</code>"
-            )
-            return
-
-        if sub_command == "context":
-            if len(command) > 2:
-                action = command[2]
-                if action == "on":
-                    db.set("custom.gemini", "context_on", True)
-                    await message.edit_text("<b>Gemini context is now ON.</b>")
-                elif action == "off":
-                    db.set("custom.gemini", "context_on", False)
-                    await message.edit_text("<b>Gemini context is now OFF.</b>")
-                elif action == "clear":
-                    user_id = message.from_user.id
-                    async with _chat_lock:
-                        if user_id in chat_history:
-                            del chat_history[user_id]
-                        if user_id in last_interaction_time:
-                            del last_interaction_time[user_id]
-                    await message.edit_text("<b>Gemini chat history cleared.</b>")
-                elif action == "show":
-                    user_id = message.from_user.id
-                    user_chat_history = chat_history.get(user_id, [])
-                    if user_chat_history:
-                        response_text = "**Current chat history:**\n\n"
-                        for item in user_chat_history:
-                            role = item.role.capitalize()
-                            
-                            text_parts = [p.text for p in item.parts if hasattr(p, 'text') and p.text]
-                            
-                            # Correctly check for actual image data
-                            has_image = any(
-                                hasattr(p, 'inline_data') and p.inline_data and p.inline_data.data 
-                                for p in item.parts
-                            )
-
-                            if text_parts:
-                                full_content = " ".join(text_parts)
-                            elif has_image:
-                                full_content = "[Image]"
-                            else:
-                                full_content = "[Empty Message]"
-
-                            response_text += f"**{role}:**\n> {full_content.replace(chr(10), chr(10) + '> ')}\n"
-                        await message.edit_text(response_text, parse_mode=enums.ParseMode.MARKDOWN)
-                    else:
-                        await message.edit_text("**Chat history is empty.**")
-                elif action == "expire":
-                    if len(command) > 3:
-                        try:
-                            minutes = int(command[3])
-                            if minutes <= 0:
-                                await message.edit_text("<b>Expiration time must be a positive integer.</b>")
-                            else:
-                                db.set("custom.gemini", "context_expiration_minutes", minutes)
-                                global context_expiration_minutes
-                                context_expiration_minutes = minutes
-                                await message.edit_text(f"<b>Gemini context expiration set to {minutes} minutes.</b>")
-                        except ValueError:
-                            await message.edit_text("<b>Invalid number for minutes.</b>")
-                    else:
-                        current_expiry = db.get("custom.gemini", "context_expiration_minutes", 5)
-                        await message.edit_text(f"<b>Current expiration time is {current_expiry} minutes.</b>\n"
-                                              f"<b>Usage:</b> <code>{prefix}gemini context expire [minutes]</code>")
-                    return
-                else:
-                    await message.edit_text(
-                        f"<b>Usage:</b> <code>{prefix}gemini context [on|off|clear|show|expire]</code>"
-                    )
-            else:
-                is_on = db.get("custom.gemini", "context_on", False)
-                status = "ON" if is_on else "OFF"
-                current_expiry = db.get("custom.gemini", "context_expiration_minutes", 5)
-                await message.edit_text(f"<b>Gemini context is currently {status}.</b>\n"
-                                      f"<b>Expiration time is {current_expiry} minutes.</b>")
-            return
-
-    # Fallback to default behavior if no subcommand matches
-    await _ask_gemini(client, message)
-
+                await handler(message, command)
+        else:
+            # Fallback to default behavior if no subcommand matches
+            await _ask_gemini(client, message)
+    else:
+        await _ask_gemini(client, message)
 
 
 modules_help["gemini"] = {
