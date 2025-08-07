@@ -22,24 +22,27 @@ jobs:
       - name: Checkout this repository
         uses: actions/checkout@v4
 
+      - name: Create workdir
+        run: mkdir -p ./${{ env.WORKDIR }}
+
       - name: Clone repository
         working-directory: ./${{ env.WORKDIR }}
         run: |
           if [ -z "${{ github.event.inputs.commit_hash }}" ]; then
             echo "Cloning the latest version..."
-            git clone --depth 1 "$UPSTREAM_REPO"
+            git clone --depth 1 "$UPSTREAM_REPO" .
           else
             echo "Cloning the full repository to checkout commit ${{ github.event.inputs.commit_hash }}..."
-            git clone "$UPSTREAM_REPO"
+            git clone "$UPSTREAM_REPO" .
             echo "Checking out commit ${{ github.event.inputs.commit_hash }}..."
-            git -C PagerMaid-Modify checkout ${{ github.event.inputs.commit_hash }}
+            git checkout ${{ github.event.inputs.commit_hash }}
           fi
 
       - name: Get upstream commit SHA
         working-directory: ./${{ env.WORKDIR }}
         id: get_upstream_sha
         run: |
-          UPSTREAM_SHA=$(git -C ./PagerMaid-Modify rev-parse --short HEAD)
+          UPSTREAM_SHA=$(git rev-parse --short HEAD)
           echo "Upstream commit SHA is $UPSTREAM_SHA"
           echo "upstream_sha=$UPSTREAM_SHA" >> $GITHUB_OUTPUT
 
