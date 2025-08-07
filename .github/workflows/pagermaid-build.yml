@@ -76,6 +76,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: "./${{ env.WORKDIR }}"
+          file: Dockerfile.alpine
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
