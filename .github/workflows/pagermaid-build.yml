@@ -1,0 +1,81 @@
+name: pagermaid build
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_hash:
+        description: 'Optional: Specify a commit hash to build'
+        required: false
+        default: ''
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      UPSTREAM_REPO: https://github.com/TeamPGM/PagerMaid-Modify.git
+      WORKDIR: pagermaid
+
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+
+      - name: Clone repository
+        working-directory: ./${{ env.WORKDIR }}
+        run: |
+          if [ -z "${{ github.event.inputs.commit_hash }}" ]; then
+            echo "Cloning the latest version..."
+            git clone --depth 1 "$UPSTREAM_REPO"
+          else
+            echo "Cloning the full repository to checkout commit ${{ github.event.inputs.commit_hash }}..."
+            git clone "$UPSTREAM_REPO"
+            echo "Checking out commit ${{ github.event.inputs.commit_hash }}..."
+            git -C PagerMaid-Modify checkout ${{ github.event.inputs.commit_hash }}
+          fi
+
+      - name: Get upstream commit SHA
+        working-directory: ./${{ env.WORKDIR }}
+        id: get_upstream_sha
+        run: |
+          UPSTREAM_SHA=$(git -C ./PagerMaid-Modify rev-parse --short HEAD)
+          echo "Upstream commit SHA is $UPSTREAM_SHA"
+          echo "upstream_sha=$UPSTREAM_SHA" >> $GITHUB_OUTPUT
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Generate tag from date
+        id: date_tag
+        run: |
+          DATE_TAG=$(date +%F)
+          echo "date_tag=$DATE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/outlook84/pagermaid-modify
+          tags: |
+            type=raw,enable=true,value=${{ steps.date_tag.outputs.date_tag }}
+            type=sha,sha=${{ steps.get_upstream_sha.outputs.upstream_sha }}
+            latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: "./${{ env.WORKDIR }}"
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
