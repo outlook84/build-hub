@@ -15,7 +15,7 @@ jobs:
       contents: read
       packages: write
     env:
-      UPSTREAM_REPO: https://github.com/TeamPGM/PagerMaid-Modify.git
+      UPSTREAM_REPO: https://github.com/outlook84/PagerMaid-Modify.git
       WORKDIR: pagermaid
 
     steps:
@@ -30,13 +30,23 @@ jobs:
         run: |
           if [ -z "${{ github.event.inputs.commit_hash }}" ]; then
             echo "Cloning the latest version..."
-            git clone --depth 1 "$UPSTREAM_REPO" .
+            git clone --depth 1 -b dev "$UPSTREAM_REPO" .
           else
             echo "Cloning the full repository to checkout commit ${{ github.event.inputs.commit_hash }}..."
-            git clone "$UPSTREAM_REPO" .
+            git clone -b dev "$UPSTREAM_REPO" .
             echo "Checking out commit ${{ github.event.inputs.commit_hash }}..."
             git checkout ${{ github.event.inputs.commit_hash }}
           fi
+
+      - name: Append google-genai to requirements.txt
+        working-directory: ./${{ env.WORKDIR }}
+        run: |
+          echo -e "\ngoogle-genai" >> ./requirements.txt
+          echo -e "\ntelegraph[aio]" >> ./requirements.txt
+          echo -e "\nmarkdown" >> ./requirements.txt
+          echo -e "\nbeautifulsoup4" >> ./requirements.txt
+          echo -e "\nyt-dlp[default,curl-cffi]" >> ./requirements.txt
+          sed -i 's|imagemagick|imagemagick ffmpeg|' ./Dockerfile.alpine
 
       - name: Get upstream commit SHA
         working-directory: ./${{ env.WORKDIR }}
