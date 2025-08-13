@@ -46,6 +46,8 @@ jobs:
           echo -e "\nmarkdown" >> ./requirements.txt
           echo -e "\nbeautifulsoup4" >> ./requirements.txt
           echo -e "\nyt-dlp[default,curl-cffi]" >> ./requirements.txt
+          echo -e "\nFastTelethonhelper" >> ./requirements.txt
+          echo -e "\nfonttools" >> ./requirements.txt
           sed -i 's|imagemagick|imagemagick ffmpeg|' ./Dockerfile.alpine
 
       - name: Get upstream commit SHA
