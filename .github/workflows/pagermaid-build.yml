@@ -47,9 +47,9 @@ jobs:
           echo -e "\nbeautifulsoup4" >> ./requirements.txt
           echo -e "\nemoji" >> ./requirements.txt
           echo -e "\nregex" >> ./requirements.txt
-          echo -e "\nFastTelethonhelper" >> ./requirements.txt
           echo -e "\nfonttools" >> ./requirements.txt
           sed -i 's|imagemagick|imagemagick ffmpeg|' ./Dockerfile.alpine
+          sed -i 's|pip install -r requirements.txt|pip install --no-deps FastTelethonhelper \&\& pip install -r requirements.txt|' ./Dockerfile.alpine
 
       - name: Get upstream commit SHA
         working-directory: ./${{ env.WORKDIR }}
