@@ -33,7 +33,7 @@ jobs:
         run: git clone --depth 1 --branch ${{ github.event.inputs.tag }} ${{ env.UPSTREAM_REPO }}   
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: './mihomo/go.mod' # Automatically uses the Go version from your go.mod file
 
