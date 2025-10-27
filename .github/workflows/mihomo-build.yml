@@ -45,7 +45,7 @@ jobs:
           GOOS=linux GOARCH=${{ matrix.goarch }} go build -o mihomo-${{ matrix.goarch }} -tags no_fake_tcp -ldflags="${LDFLAGS}"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: mihomo-${{ matrix.goarch }} # Unique name for each artifact
           path: ./mihomo/mihomo-${{ matrix.goarch }}
