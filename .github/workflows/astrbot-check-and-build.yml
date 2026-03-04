@@ -1,0 +1,112 @@
+name: Check for astrbot new upsteam tag and build
+
+on:
+  schedule:
+    # Runs daily
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The upstream tag to build'
+        required: false
+        type: string
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # Needed to push to GitHub Packages
+    env:
+      UPSTREAM_REPO: https://github.com/AstrBotDevs/AstrBot.git
+      WORKDIR: astrbot
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5      
+
+      - name: Get upstream tag
+        id: get_tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+            echo "Using specified tag: $TAG"
+          else
+            TAG=$(git ls-remote --tags --sort="v:refname" ${{ env.UPSTREAM_REPO }} | tail -n 1 | cut -d'/' -f3 | sed 's/\^{}//')
+            echo "Latest tag from upstream is $TAG"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Create cache directory
+        run: mkdir -p ~/.cache/build-lock/${{ env.WORKDIR }}
+
+      - name: Check cache for tag
+        id: cache-check
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/build-lock/${{ env.WORKDIR }}
+          key: build-lock-${{ steps.get_tag.outputs.tag }}
+
+      - name: Clone upsteam source code
+        working-directory: ./${{ env.WORKDIR }}
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: git clone --depth 1 --branch ${{ steps.get_tag.outputs.tag }} ${{ env.UPSTREAM_REPO }}
+
+      - name: Get upstream commit SHA
+        working-directory: ./${{ env.WORKDIR }}
+        id: get_upstream_sha
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          UPSTREAM_SHA=$(git -C ./AstrBot rev-parse --short HEAD)
+          echo "Upstream commit SHA is $UPSTREAM_SHA"
+          echo "upstream_sha=$UPSTREAM_SHA" >> $GITHUB_OUTPUT
+
+      - name: Login to GitHub Container Registry
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta
+        id: meta
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/outlook84/astrbot
+          tags: |
+            type=semver,pattern={{version}},value=${{ steps.get_tag.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.get_tag.outputs.tag }}
+            type=semver,pattern={{major}},value=${{ steps.get_tag.outputs.tag }}
+            type=sha,sha=${{ steps.get_upstream_sha.outputs.upstream_sha }}
+            latest
+
+      - name: Build and push Docker image
+        id: build-and-push
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: "./${{ env.WORKDIR }}"
+          platforms: "linux/amd64"
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Print build status
+        run: |
+          if [ "${{ steps.cache-check.outputs.cache-hit }}" == "true" ]; then
+            echo "Tag ${{ steps.get_tag.outputs.tag }} has been built before. Skipping build."
+          else
+            echo "New tag ${{ steps.get_tag.outputs.tag }} found. Docker image built and pushed successfully."
+          fi
