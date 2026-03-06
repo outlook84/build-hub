@@ -9,6 +9,10 @@ RUN apk add --no-cache \
     musl-dev \
     libffi-dev \
     openssl-dev \
+    python3-dev \
+    linux-headers \
+    rust \
+    cargo \
     make
 
 # Install uv and generate + install Python deps
@@ -16,6 +20,7 @@ RUN apk add --no-cache \
 COPY ./AstrBot .
 RUN python -m pip install --no-cache-dir uv \
     && echo "3.12" > .python-version \
+    && uv add telethon cryptg \
     && uv lock \
     && uv export --format requirements.txt --output-file requirements.txt --frozen \
     && uv pip install -r requirements.txt --no-cache-dir --system \
