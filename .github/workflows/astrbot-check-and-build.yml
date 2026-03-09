@@ -7,8 +7,18 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'The upstream tag to build'
+        description: 'Optional: upstream tag to build'
         required: false
+        type: string
+      upstream_repo:
+        description: 'Optional: upstream repo URL for manual build'
+        required: false
+        default: 'https://github.com/AstrBotDevs/AstrBot.git'
+        type: string
+      upstream_branch:
+        description: 'Optional: upstream branch for manual build'
+        required: false
+        default: 'main'
         type: string
 
 jobs:
@@ -23,34 +33,82 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5      
+        uses: actions/checkout@v5
 
-      - name: Get upstream tag
-        id: get_tag
+      - name: Create workdir
+        run: mkdir -p ./${{ env.WORKDIR }}
+
+      - name: Resolve upstream source
+        id: resolve_source
         run: |
-          if [ -n "${{ github.event.inputs.tag }}" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-            echo "Using specified tag: $TAG"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            REPO="${{ github.event.inputs.upstream_repo }}"
+            BRANCH="${{ github.event.inputs.upstream_branch }}"
+
+            if [ -n "${{ github.event.inputs.tag }}" ]; then
+              TAG="${{ github.event.inputs.tag }}"
+              COMMIT_SHA=$(git ls-remote "$REPO" "refs/tags/$TAG^{}" "refs/tags/$TAG" | tail -n 1 | cut -f1)
+              echo "Using specified tag: $TAG from $REPO"
+              echo "mode=tag" >> $GITHUB_OUTPUT
+              echo "tag=$TAG" >> $GITHUB_OUTPUT
+              echo "ref_name=$TAG" >> $GITHUB_OUTPUT
+            else
+              COMMIT_SHA=$(git ls-remote --heads "$REPO" "$BRANCH" | awk 'NR==1 {print $1}')
+              echo "Using latest commit from $REPO branch $BRANCH"
+              echo "mode=branch" >> $GITHUB_OUTPUT
+              echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+              echo "ref_name=$BRANCH" >> $GITHUB_OUTPUT
+            fi
           else
-            TAG=$(git ls-remote --tags --sort="v:refname" ${{ env.UPSTREAM_REPO }} | tail -n 1 | cut -d'/' -f3 | sed 's/\^{}//')
+            REPO="${{ env.UPSTREAM_REPO }}"
+            TAG=$(git ls-remote --tags --sort="v:refname" "$REPO" | tail -n 1 | cut -d'/' -f3 | sed 's/\^{}//')
+            COMMIT_SHA=$(git ls-remote "$REPO" "refs/tags/$TAG^{}" "refs/tags/$TAG" | tail -n 1 | cut -f1)
             echo "Latest tag from upstream is $TAG"
+            echo "mode=tag" >> $GITHUB_OUTPUT
+            echo "tag=$TAG" >> $GITHUB_OUTPUT
+            echo "ref_name=$TAG" >> $GITHUB_OUTPUT
           fi
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+          if [ -z "$COMMIT_SHA" ]; then
+            if [ -n "${BRANCH:-}" ]; then
+              echo "Failed to resolve upstream branch '$BRANCH' from $REPO"
+            elif [ -n "${TAG:-}" ]; then
+              echo "Failed to resolve upstream tag '$TAG' from $REPO"
+            else
+              echo "Failed to resolve upstream commit SHA from $REPO"
+            fi
+            exit 1
+          fi
+
+          SHORT_SHA=$(printf '%s' "$COMMIT_SHA" | cut -c1-7)
+          SAFE_REF=$(printf '%s' "${TAG:-$BRANCH}" | tr '/:@ ' '-' | tr -cd '[:alnum:]._-')
+          SAFE_REPO=$(printf '%s' "$REPO" | tr '/:@ ' '-' | tr -cd '[:alnum:]._-')
+
+          echo "repo=$REPO" >> $GITHUB_OUTPUT
+          echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
+          echo "commit_sha_short=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "safe_ref=$SAFE_REF" >> $GITHUB_OUTPUT
+          echo "safe_repo=$SAFE_REPO" >> $GITHUB_OUTPUT
 
       - name: Create cache directory
         run: mkdir -p ~/.cache/build-lock/${{ env.WORKDIR }}
 
-      - name: Check cache for tag
+      - name: Check cache for upstream revision
         id: cache-check
         uses: actions/cache@v4
         with:
           path: ~/.cache/build-lock/${{ env.WORKDIR }}
-          key: build-lock-${{ steps.get_tag.outputs.tag }}
+          key: build-lock-${{ steps.resolve_source.outputs.safe_repo }}-${{ steps.resolve_source.outputs.commit_sha }}
 
-      - name: Clone upsteam source code
+      - name: Clone upstream source code
         working-directory: ./${{ env.WORKDIR }}
         if: steps.cache-check.outputs.cache-hit != 'true'
-        run: git clone --depth 1 --branch ${{ steps.get_tag.outputs.tag }} ${{ env.UPSTREAM_REPO }}
+        run: |
+          if [ "${{ steps.resolve_source.outputs.mode }}" = "tag" ]; then
+            git clone --depth 1 --branch "${{ steps.resolve_source.outputs.tag }}" "${{ steps.resolve_source.outputs.repo }}" AstrBot
+          else
+            git clone --depth 1 --branch "${{ steps.resolve_source.outputs.branch }}" "${{ steps.resolve_source.outputs.repo }}" AstrBot
+          fi
 
       - name: Get upstream commit SHA
         working-directory: ./${{ env.WORKDIR }}
@@ -84,9 +142,10 @@ jobs:
         with:
           images: ghcr.io/outlook84/astrbot
           tags: |
-            type=semver,pattern={{version}},value=${{ steps.get_tag.outputs.tag }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ steps.get_tag.outputs.tag }}
-            type=semver,pattern={{major}},value=${{ steps.get_tag.outputs.tag }}
+            type=semver,pattern={{version}},value=${{ steps.resolve_source.outputs.tag }},enable=${{ steps.resolve_source.outputs.mode == 'tag' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.resolve_source.outputs.tag }},enable=${{ steps.resolve_source.outputs.mode == 'tag' }}
+            type=semver,pattern={{major}},value=${{ steps.resolve_source.outputs.tag }},enable=${{ steps.resolve_source.outputs.mode == 'tag' }}
+            type=raw,value=${{ steps.resolve_source.outputs.safe_ref }},enable=${{ steps.resolve_source.outputs.mode == 'branch' }}
             type=sha,sha=${{ steps.get_upstream_sha.outputs.upstream_sha }}
             latest
 
@@ -106,7 +165,7 @@ jobs:
       - name: Print build status
         run: |
           if [ "${{ steps.cache-check.outputs.cache-hit }}" == "true" ]; then
-            echo "Tag ${{ steps.get_tag.outputs.tag }} has been built before. Skipping build."
+            echo "Upstream commit ${{ steps.resolve_source.outputs.commit_sha_short }} has been built before. Skipping build."
           else
-            echo "New tag ${{ steps.get_tag.outputs.tag }} found. Docker image built and pushed successfully."
+            echo "Upstream ${{ steps.resolve_source.outputs.ref_name }} @ ${{ steps.get_upstream_sha.outputs.upstream_sha }} built and pushed successfully."
           fi
