@@ -13,12 +13,12 @@ on:
       upstream_repo:
         description: 'Optional: upstream repo URL for manual build'
         required: false
-        default: 'https://github.com/AstrBotDevs/AstrBot.git'
+        default: 'https://github.com/outlook84/AstrBot.git'
         type: string
       upstream_branch:
         description: 'Optional: upstream branch for manual build'
         required: false
-        default: 'main'
+        default: 'dev'
         type: string
 
 jobs:
@@ -118,6 +118,21 @@ jobs:
           UPSTREAM_SHA=$(git -C ./AstrBot rev-parse --short HEAD)
           echo "Upstream commit SHA is $UPSTREAM_SHA"
           echo "upstream_sha=$UPSTREAM_SHA" >> $GITHUB_OUTPUT
+
+      - name: Set up Node.js
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: ./${{ env.WORKDIR }}/AstrBot/dashboard/package.json
+
+      - name: Build dashboard dist
+        working-directory: ./${{ env.WORKDIR }}/AstrBot/dashboard
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        run: |
+          npm install
+          npm run build
 
       - name: Login to GitHub Container Registry
         if: steps.cache-check.outputs.cache-hit != 'true'

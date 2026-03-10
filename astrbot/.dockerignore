@@ -1,0 +1,6 @@
+AstrBot/.git
+AstrBot/.github
+AstrBot/dashboard/node_modules
+AstrBot/dashboard/.vite
+AstrBot/docs/node_modules
+AstrBot/docs/.vitepress/cache

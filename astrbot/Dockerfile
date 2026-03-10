@@ -1,5 +1,5 @@
-# ======== Stage 1: Builder ========
-FROM python:3.12-alpine AS builder
+# ======== Stage 1: Python Builder ========
+FROM python:3.12-alpine AS python-builder
 WORKDIR /AstrBot
 
 # Install build-time dependencies only
@@ -16,7 +16,6 @@ RUN apk add --no-cache \
     make
 
 # Install uv and generate + install Python deps
-# Copy dependency manifests and build scripts for better layer caching
 COPY ./AstrBot .
 RUN python -m pip install --no-cache-dir uv \
     && echo "3.12" > .python-version \
@@ -40,11 +39,15 @@ RUN apk add --no-cache \
     tzdata
 
 # Copy installed Python packages from builder
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+COPY --from=python-builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=python-builder /usr/local/bin /usr/local/bin
 
 # Copy application source
 COPY ./AstrBot /AstrBot/
+RUN mkdir -p /AstrBot/data \
+    && mv /AstrBot/dashboard/dist /AstrBot/data/dist \
+    && mkdir -p /AstrBot/astrbot/dashboard \
+    && ln -s /AstrBot/data/dist /AstrBot/astrbot/dashboard/dist
 
 EXPOSE 6185
 
