@@ -1,0 +1,170 @@
+name: nanobot build
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Optional: upstream tag to build'
+        required: false
+        type: string
+      upstream_repo:
+        description: 'Optional: upstream repo URL for manual build'
+        required: false
+        default: 'https://github.com/HKUDS/nanobot.git'
+        type: string
+      upstream_branch:
+        description: 'Optional: upstream branch for manual build when tag is empty'
+        required: false
+        default: 'main'
+        type: string
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      UPSTREAM_REPO: https://github.com/HKUDS/nanobot.git
+      WORKDIR: nanobot
+      SOURCE_DIR: source
+      IMAGE_NAME: ghcr.io/outlook84/nanobot
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Create workdir
+        run: mkdir -p ./${{ env.WORKDIR }}
+
+      - name: Resolve upstream source
+        id: resolve_source
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            REPO="${{ github.event.inputs.upstream_repo }}"
+            BRANCH="${{ github.event.inputs.upstream_branch }}"
+            if [ -n "${{ github.event.inputs.tag }}" ]; then
+              TAG="${{ github.event.inputs.tag }}"
+              COMMIT_SHA=$(git ls-remote "$REPO" "refs/tags/$TAG^{}" "refs/tags/$TAG" | tail -n 1 | cut -f1)
+              echo "Using specified tag: $TAG from $REPO"
+              echo "mode=tag" >> "$GITHUB_OUTPUT"
+              echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+              echo "ref_name=$TAG" >> "$GITHUB_OUTPUT"
+            else
+              COMMIT_SHA=$(git ls-remote --heads "$REPO" "$BRANCH" | awk 'NR==1 {print $1}')
+              echo "Using latest commit from $REPO branch $BRANCH"
+              echo "mode=branch" >> "$GITHUB_OUTPUT"
+              echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+              echo "ref_name=$BRANCH" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            REPO="${{ env.UPSTREAM_REPO }}"
+            TAG=$(git ls-remote --tags --sort="v:refname" "$REPO" | tail -n 1 | cut -d'/' -f3 | sed 's/\^{}//')
+            if [ -n "$TAG" ]; then
+              COMMIT_SHA=$(git ls-remote "$REPO" "refs/tags/$TAG^{}" "refs/tags/$TAG" | tail -n 1 | cut -f1)
+              echo "Latest tag from upstream is $TAG"
+              echo "mode=tag" >> "$GITHUB_OUTPUT"
+              echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+              echo "ref_name=$TAG" >> "$GITHUB_OUTPUT"
+            else
+              BRANCH="main"
+              COMMIT_SHA=$(git ls-remote --heads "$REPO" "$BRANCH" | awk 'NR==1 {print $1}')
+              echo "No upstream tags found, falling back to branch $BRANCH"
+              echo "mode=branch" >> "$GITHUB_OUTPUT"
+              echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+              echo "ref_name=$BRANCH" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+          if [ -z "$COMMIT_SHA" ]; then
+            echo "Failed to resolve upstream commit" >&2
+            exit 1
+          fi
+
+          SAFE_REF=$(printf '%s' "${TAG:-${BRANCH:-main}}" | tr '/:@' '-' | tr -cd '[:alnum:]._-')
+          COMMIT_SHA_SHORT=$(printf '%s' "$COMMIT_SHA" | cut -c1-12)
+          IS_DEFAULT_REPO=false
+          if [ "$REPO" = "${{ env.UPSTREAM_REPO }}" ]; then
+            IS_DEFAULT_REPO=true
+          fi
+
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+          echo "commit_sha_short=$COMMIT_SHA_SHORT" >> "$GITHUB_OUTPUT"
+          echo "safe_ref=$SAFE_REF" >> "$GITHUB_OUTPUT"
+          echo "is_default_repo=$IS_DEFAULT_REPO" >> "$GITHUB_OUTPUT"
+
+      - name: Create cache directory
+        run: mkdir -p ~/.cache/build-lock/${{ env.WORKDIR }}
+
+      - name: Check cache for commit
+        id: cache-check
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/build-lock/${{ env.WORKDIR }}
+          key: build-lock-${{ env.WORKDIR }}-${{ steps.resolve_source.outputs.commit_sha }}
+
+      - name: Clone upstream source
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        working-directory: ./${{ env.WORKDIR }}
+        run: |
+          if [ "${{ steps.resolve_source.outputs.mode }}" = "tag" ]; then
+            git clone --depth 1 --branch "${{ steps.resolve_source.outputs.tag }}" "${{ steps.resolve_source.outputs.repo }}" "${{ env.SOURCE_DIR }}"
+          else
+            git clone --depth 1 --branch "${{ steps.resolve_source.outputs.branch }}" "${{ steps.resolve_source.outputs.repo }}" "${{ env.SOURCE_DIR }}"
+          fi
+
+      - name: Get upstream commit SHA
+        id: get_upstream_sha
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        working-directory: ./${{ env.WORKDIR }}
+        run: |
+          UPSTREAM_SHA=$(git -C "./${{ env.SOURCE_DIR }}" rev-parse --short HEAD)
+          echo "Upstream commit SHA is $UPSTREAM_SHA"
+          echo "upstream_sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GitHub Container Registry
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta
+        id: meta
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ steps.resolve_source.outputs.tag }},enable=${{ steps.resolve_source.outputs.mode == 'tag' }}
+            type=raw,value=${{ steps.resolve_source.outputs.safe_ref }},enable=${{ steps.resolve_source.outputs.mode == 'branch' }}
+            type=sha,sha=${{ steps.get_upstream_sha.outputs.upstream_sha }}
+            type=raw,value=latest,enable=${{ steps.resolve_source.outputs.mode == 'tag' && steps.resolve_source.outputs.is_default_repo == 'true' }}
+
+      - name: Build and push Docker image
+        if: steps.cache-check.outputs.cache-hit != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: "./${{ env.WORKDIR }}/${{ env.SOURCE_DIR }}"
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Print build status
+        run: |
+          if [ "${{ steps.cache-check.outputs.cache-hit }}" = "true" ]; then
+            echo "Upstream commit ${{ steps.resolve_source.outputs.commit_sha_short }} has been built before. Skipping build."
+          else
+            echo "Built and pushed nanobot image for ${{ steps.resolve_source.outputs.ref_name }} @ ${{ steps.get_upstream_sha.outputs.upstream_sha }}."
+          fi
