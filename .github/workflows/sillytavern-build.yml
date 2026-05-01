@@ -42,7 +42,7 @@ jobs:
 
       - name: Check cache for tag
         id: cache-check
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/build-lock/${{ env.WORKDIR }}
           key: build-lock-${{ steps.get_tag.outputs.tag }}
