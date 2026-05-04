@@ -151,7 +151,7 @@ jobs:
 
       - name: Build and push Docker image
         if: steps.cache-check.outputs.cache-hit != 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: "./${{ env.WORKDIR }}/${{ env.SOURCE_DIR }}"
           platforms: linux/amd64
