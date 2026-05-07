@@ -101,7 +101,7 @@ jobs:
 
       - name: Check cache for commit
         id: cache-check
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/build-lock/${{ env.WORKDIR }}
           key: build-lock-${{ env.WORKDIR }}-${{ steps.resolve_source.outputs.commit_sha }}
