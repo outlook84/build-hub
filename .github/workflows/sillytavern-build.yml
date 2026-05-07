@@ -87,7 +87,7 @@ jobs:
       - name: Build and push Docker image
         id: build-and-push
         if: steps.cache-check.outputs.cache-hit != 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: "./${{ env.WORKDIR }}"
           platforms: ${{ github.event_name == 'workflow_dispatch' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
