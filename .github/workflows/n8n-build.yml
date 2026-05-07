@@ -65,7 +65,7 @@ jobs:
       - name: Docker meta
         id: meta
         if: steps.cache-check.outputs.cache-hit != 'true'
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/outlook84/n8n
           tags: |
