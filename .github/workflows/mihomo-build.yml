@@ -30,15 +30,15 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Clone upsteam source code
-        run: git clone --depth 1 --branch ${{ github.event.inputs.tag }} ${{ env.UPSTREAM_REPO }}   
+        run: git clone --depth 1 --branch ${{ github.event.inputs.tag }} ${{ env.UPSTREAM_REPO }} mihomo-src
 
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: './mihomo/go.mod' # Automatically uses the Go version from your go.mod file
+          go-version-file: './mihomo-src/go.mod' # Automatically uses the Go version from your go.mod file
 
       - name: Build
-        working-directory: ./mihomo
+        working-directory: ./mihomo-src
         run: |
           LDFLAGS="-s -w -X 'github.com/metacubex/mihomo/constant.Version=${{ github.event.inputs.tag }}'"
           # The -ldflags strip debug info to reduce binary size.
@@ -48,7 +48,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: mihomo-${{ matrix.goarch }} # Unique name for each artifact
-          path: ./mihomo/mihomo-${{ matrix.goarch }}
+          path: ./mihomo-src/mihomo-${{ matrix.goarch }}
 
   # The 'release' job runs after all 'build' jobs have completed successfully.
   release:
