@@ -1,0 +1,83 @@
+name: mihomo docker build
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Upstream tag to build (leave empty for latest v* release)'
+        required: false
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      UPSTREAM_REPO: https://github.com/MetaCubeX/mihomo.git
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve upstream tag
+        id: get_tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+            echo "Using specified tag: $TAG"
+          else
+            # Get the latest tag that matches vX.Y.Z (no pre-release suffix)
+            TAG=$(git ls-remote --tags --sort="v:refname" ${{ env.UPSTREAM_REPO }} \
+              | grep -oE 'refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | tail -n 1 \
+              | cut -d'/' -f3)
+            echo "Latest upstream tag: $TAG"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Clone upstream source at tag
+        run: |
+          git clone --depth 1 --branch ${{ steps.get_tag.outputs.tag }} \
+            ${{ env.UPSTREAM_REPO }} upstream
+
+      - name: Set build time
+        id: buildtime
+        run: echo "value=$(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/mihomo
+          tags: |
+            type=semver,pattern={{version}},value=${{ steps.get_tag.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.get_tag.outputs.tag }}
+            type=semver,pattern={{major}},value=${{ steps.get_tag.outputs.tag }}
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: upstream
+          file: mihomo/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            MIHOMO_VERSION=${{ steps.get_tag.outputs.tag }}
+            BUILDTIME=${{ steps.buildtime.outputs.value }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
