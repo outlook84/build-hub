@@ -63,7 +63,7 @@ jobs:
           path: artifacts # Download all artifacts into an 'artifacts' directory
 
       - name: Create Release and Upload Assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.event.inputs.tag }}
           name: mihomo release ${{ github.event.inputs.tag }}
