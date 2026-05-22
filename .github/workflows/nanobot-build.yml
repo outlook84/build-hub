@@ -1,8 +1,8 @@
 name: nanobot build
 
 on:
-  schedule:
-    - cron: '0 0 * * *'
+#  schedule:
+#    - cron: '0 0 * * *'
   workflow_dispatch:
     inputs:
       tag:
@@ -12,12 +12,12 @@ on:
       upstream_repo:
         description: 'Optional: upstream repo URL for manual build'
         required: false
-        default: 'https://github.com/HKUDS/nanobot.git'
+        default: 'https://github.com/outlook84/nanobot.git'
         type: string
       upstream_branch:
         description: 'Optional: upstream branch for manual build when tag is empty'
         required: false
-        default: 'main'
+        default: 'dev'
         type: string
 
 jobs:
@@ -27,7 +27,8 @@ jobs:
       contents: read
       packages: write
     env:
-      UPSTREAM_REPO: https://github.com/HKUDS/nanobot.git
+      UPSTREAM_REPO: https://github.com/outlook84/nanobot.git
+      UPSTREAM_BRANCH: dev
       WORKDIR: nanobot
       SOURCE_DIR: source
       IMAGE_NAME: ghcr.io/outlook84/nanobot
@@ -61,21 +62,12 @@ jobs:
             fi
           else
             REPO="${{ env.UPSTREAM_REPO }}"
-            TAG=$(git ls-remote --tags --sort="v:refname" "$REPO" | tail -n 1 | cut -d'/' -f3 | sed 's/\^{}//')
-            if [ -n "$TAG" ]; then
-              COMMIT_SHA=$(git ls-remote "$REPO" "refs/tags/$TAG^{}" "refs/tags/$TAG" | tail -n 1 | cut -f1)
-              echo "Latest tag from upstream is $TAG"
-              echo "mode=tag" >> "$GITHUB_OUTPUT"
-              echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-              echo "ref_name=$TAG" >> "$GITHUB_OUTPUT"
-            else
-              BRANCH="main"
-              COMMIT_SHA=$(git ls-remote --heads "$REPO" "$BRANCH" | awk 'NR==1 {print $1}')
-              echo "No upstream tags found, falling back to branch $BRANCH"
-              echo "mode=branch" >> "$GITHUB_OUTPUT"
-              echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
-              echo "ref_name=$BRANCH" >> "$GITHUB_OUTPUT"
-            fi
+            BRANCH="${{ env.UPSTREAM_BRANCH }}"
+            COMMIT_SHA=$(git ls-remote --heads "$REPO" "$BRANCH" | awk 'NR==1 {print $1}')
+            echo "Using latest commit from $REPO branch $BRANCH"
+            echo "mode=branch" >> "$GITHUB_OUTPUT"
+            echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+            echo "ref_name=$BRANCH" >> "$GITHUB_OUTPUT"
           fi
 
           if [ -z "$COMMIT_SHA" ]; then
@@ -146,7 +138,7 @@ jobs:
           tags: |
             type=raw,value=${{ steps.resolve_source.outputs.tag }},enable=${{ steps.resolve_source.outputs.mode == 'tag' }}
             type=raw,value=${{ steps.resolve_source.outputs.safe_ref }},enable=${{ steps.resolve_source.outputs.mode == 'branch' }}
-            type=sha,sha=${{ steps.get_upstream_sha.outputs.upstream_sha }}
+            type=raw,value=sha-${{ steps.get_upstream_sha.outputs.upstream_sha }}
             type=raw,value=latest,enable=${{ steps.resolve_source.outputs.mode == 'tag' && steps.resolve_source.outputs.is_default_repo == 'true' }}
 
       - name: Build and push Docker image
