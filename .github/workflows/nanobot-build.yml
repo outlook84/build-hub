@@ -146,6 +146,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: "./${{ env.WORKDIR }}/${{ env.SOURCE_DIR }}"
+          file: "./${{ env.WORKDIR }}/${{ env.SOURCE_DIR }}/Dockerfile.setuid"
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
