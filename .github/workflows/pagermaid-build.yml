@@ -41,10 +41,6 @@ jobs:
       - name: Append google-genai to requirements.txt
         working-directory: ./${{ env.WORKDIR }}
         run: |
-          echo -e "\ngoogle-genai" >> ./requirements.txt
-          echo -e "\ntelegraph[aio]" >> ./requirements.txt
-          echo -e "\nmarkdown" >> ./requirements.txt
-          echo -e "\nbeautifulsoup4" >> ./requirements.txt
           echo -e "\nemoji" >> ./requirements.txt
           echo -e "\nregex" >> ./requirements.txt
           echo -e "\nfonttools" >> ./requirements.txt
