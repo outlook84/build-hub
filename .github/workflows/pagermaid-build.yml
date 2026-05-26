@@ -47,7 +47,7 @@ jobs:
           echo -e "\nqrcode[pil]" >> ./requirements.txt
           echo -e "\npyzbar" >> ./requirements.txt
           sed -i 's|libmagic|libmagic ffmpeg|' ./Dockerfile.alpine
-          sed -i 's|pip install -r requirements.txt|pip install git+https://github.com/outlook84/FastTelethonhelper.git \&\& pip install -r requirements.txt|' ./Dockerfile.alpine
+          sed -i 's|uv pip install -r requirements.txt|uv pip install git+https://github.com/outlook84/FastTelethonhelper.git \&\& uv pip install -r requirements.txt|' ./Dockerfile.alpine
 
       - name: Get upstream commit SHA
         working-directory: ./${{ env.WORKDIR }}
