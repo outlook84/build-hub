@@ -27,7 +27,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Clone upsteam source code
         run: git clone --depth 1 --branch ${{ github.event.inputs.tag }} ${{ env.UPSTREAM_REPO }} mihomo-src
